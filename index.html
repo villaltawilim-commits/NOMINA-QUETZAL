@@ -239,6 +239,12 @@
   .toast.error{ background:var(--critical); color:#fff; }
 
   .banner{ background:var(--warning-tint); color:var(--warning); border-radius:10px; padding:10px 14px; font-size:.82rem; margin-bottom:16px; }
+  .birthday-card{ background:#FDF0E4; border:1px solid #E0A458; border-radius:12px; padding:12px 14px; margin-bottom:20px; }
+  .birthday-card .bc-title{ font-weight:700; font-size:.88rem; color:#9A5B12; margin-bottom:6px; }
+  .birthday-card .bc-row{ display:flex; justify-content:space-between; gap:10px; font-size:.85rem; padding:4px 0; color:#7A4A1A; border-top:1px solid #EFCFA0; }
+  .birthday-card .bc-row:first-of-type{ border-top:none; }
+  .birthday-card .bc-name{ font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .birthday-card .bc-day{ flex-shrink:0; font-weight:700; }
   .divider-label{ font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:600; margin:18px 0 8px; }
 </style>
 </head>
@@ -515,6 +521,21 @@ function buildDbShim(fsDb){
     });
     return { totalQ1: round2(totalQ1), totalQ2: round2(totalQ2), total: round2(totalQ1 + totalQ2) };
   }
+  function cumpleanosDelMes(){
+    var mesActual = new Date().getMonth();
+    var empresasIds = empresasAccesibles().map(function(em){ return em.id; });
+    return state.empleados.filter(function(e){
+      if(e.activo === false) return false;
+      if(empresasIds.indexOf(e.empresaId) === -1) return false;
+      if(!e.fechaNacimiento) return false;
+      var d = new Date(e.fechaNacimiento + 'T00:00:00');
+      return !isNaN(d.getTime()) && d.getMonth() === mesActual;
+    }).map(function(e){
+      var d = new Date(e.fechaNacimiento + 'T00:00:00');
+      var empresa = state.empresas.find(function(em){ return em.id === e.empresaId; });
+      return { nombre: e.nombre, dia: d.getDate(), empresaNombre: empresa ? empresa.nombre : '' };
+    }).sort(function(a,b){ return a.dia - b.dia; });
+  }
   function periodoEtiqueta(fechaISO, periodoTipo){
     var d = new Date(fechaISO + "T00:00:00");
     var mes = MESES[d.getMonth()] || "";
@@ -784,9 +805,18 @@ function buildDbShim(fsDb){
     var deduccionesMes = pagosMes.reduce(function(s,p){ return s + (Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeducciones)||0); }, 0);
     var recientes = pagosEmpresa.slice(0,5);
     var proy = computeProyeccionMes();
+    var cumples = cumpleanosDelMes();
+    var mostrarEmpresaEnCumples = empresasAccesibles().length > 1;
 
     el.innerHTML =
       '<div class="view-head"><h1>Resumen</h1><p>'+esc(MESES[new Date().getMonth()])+' '+new Date().getFullYear()+'</p></div>' +
+      (cumples.length ?
+        '<div class="birthday-card"><div class="bc-title">🎂 Cumpleaños este mes</div>' +
+          cumples.map(function(c){
+            return '<div class="bc-row"><span class="bc-name">'+esc(c.nombre)+(mostrarEmpresaEnCumples? ' · '+esc(c.empresaNombre) : '')+'</span><span class="bc-day">Día '+c.dia+'</span></div>';
+          }).join('') +
+        '</div>'
+        : '') +
       '<div class="stat-row">' +
         '<div class="stat-tile"><div class="label">Empleados</div><div class="value">'+empleadosActivos.length+'</div></div>' +
         '<div class="stat-tile"><div class="label">Nómina neta (mes)</div><div class="value money">'+netoMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
