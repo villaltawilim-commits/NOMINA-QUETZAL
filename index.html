@@ -1653,8 +1653,20 @@ function buildDbShim(fsDb){
           '</label>';
         }).join('')
       ) +
-      '<button class="btn btn-primary btn-block" id="ed-submit" style="margin-top:14px;">Guardar cambios</button>';
+      '<button class="btn btn-primary btn-block" id="ed-submit" style="margin-top:14px;">Guardar cambios</button>' +
+      '<button class="btn btn-danger btn-block" id="ed-delete" style="margin-top:8px;">Eliminar empresa</button>';
     openSheet(esc(empresa.nombre), body, function(root){
+      root.querySelector('#ed-delete').addEventListener('click', async function(){
+        var nEmpleados = state.empleados.filter(function(e){ return e.empresaId === empresa.id; }).length;
+        var msg = nEmpleados > 0
+          ? '¿Eliminar "'+empresa.nombre+'"? Tiene '+nEmpleados+' empleado(s) registrados — sus datos no se borrarán, pero quedarán inaccesibles desde la app al eliminar la empresa. Esta acción no se puede deshacer.'
+          : '¿Eliminar "'+empresa.nombre+'"? Esta acción no se puede deshacer.';
+        if(!confirm(msg)) return;
+        try{
+          await state.db.collection('empresas').doc(empresa.id).delete();
+          toast('Empresa eliminada'); closeSheet();
+        }catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
       root.querySelector('#ed-submit').addEventListener('click', async function(){
         var nombre = root.querySelector('#ed-nombre').value.trim();
         if(!nombre){ toast('El nombre es obligatorio', true); return; }
