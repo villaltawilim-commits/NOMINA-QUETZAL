@@ -260,9 +260,10 @@
         <span class="mark">🧾 Q</span>
         <select id="empresa-switcher" class="co-name"></select>
       </div>
-      <button class="who-btn" id="who-btn" title="Cerrar sesión">
+      <button class="who-btn" id="who-btn" title="Cerrar sesión" aria-label="Cerrar sesión">
         <span class="role-pill" id="role-pill-header">—</span>
         <span class="avatar" id="header-avatar">?</span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--ink-faint);"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>
       </button>
     </header>
 
@@ -598,40 +599,47 @@ function buildDbShim(fsDb){
 
   /* ============================ FIRESTORE LISTENERS ============================ */
   var listenersStarted = false;
+  var unsubscribes = [];
   function initFirestoreListeners(){
     if(listenersStarted) return;
     listenersStarted = true;
     var db = state.db;
 
-    db.collection('empleados').onSnapshot(function(snap){
+    unsubscribes.push(db.collection('empleados').onSnapshot(function(snap){
       state.empleados = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ toast('No se pudo sincronizar empleados: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados: ' + err.code, true); }));
 
-    db.collection('pagos').orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
+    unsubscribes.push(db.collection('pagos').orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
       state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ toast('No se pudo sincronizar pagos: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar pagos: ' + err.code, true); }));
 
-    db.collection('prestamos').onSnapshot(function(snap){
+    unsubscribes.push(db.collection('prestamos').onSnapshot(function(snap){
       state.prestamos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ toast('No se pudo sincronizar préstamos: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar préstamos: ' + err.code, true); }));
 
-    db.collection('comisiones').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+    unsubscribes.push(db.collection('comisiones').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
       state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ toast('No se pudo sincronizar comisiones: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar comisiones: ' + err.code, true); }));
 
-    db.collection('equipo').onSnapshot(function(snap){
+    unsubscribes.push(db.collection('equipo').onSnapshot(function(snap){
       state.equipo = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       checkProfileAndRender();
-    }, function(err){ toast('No se pudo sincronizar el equipo: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar el equipo: ' + err.code, true); }));
 
-    db.collection('empresas').onSnapshot(function(snap){
+    unsubscribes.push(db.collection('empresas').onSnapshot(function(snap){
       state.empresas = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ toast('No se pudo sincronizar empresas: ' + err.code, true); });
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empresas: ' + err.code, true); }));
+  }
+
+  function teardownFirestoreListeners(){
+    unsubscribes.forEach(function(u){ try{ u(); }catch(e){} });
+    unsubscribes = [];
+    listenersStarted = false;
   }
 
   /* ============================ AUTENTICACIÓN (Firebase Auth) ============================ */
@@ -748,8 +756,11 @@ function buildDbShim(fsDb){
       initFirestoreListeners();
       checkProfileAndRender();
     } else {
+      teardownFirestoreListeners();
       state.authUser = null;
       state.session = null;
+      state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = [];
+      state.equipo = []; state.empresas = []; state.empresaActualId = null;
       showLoginScreen();
     }
   });
@@ -1799,6 +1810,7 @@ function buildDbShim(fsDb){
     else openPagoForm();
   });
   document.getElementById('who-btn').addEventListener('click', function(){
+    if(!confirm('¿Cerrar sesión?')) return;
     signOut(auth);
   });
   document.getElementById('empresa-switcher').addEventListener('change', function(e){
