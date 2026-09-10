@@ -1,0 +1,1769 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Nómina Quetzal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --surface:#FFFFFF;
+    --surface-raised:#FFFFFF;
+    --surface-sunken:#FFFFFF;
+    --ink:#000000;
+    --ink-muted:#333333;
+    --ink-faint:#5A5A5A;
+    --border:#1450D8;
+    --primary:#1450D8;
+    --primary-ink:#FFFFFF;
+    --primary-tint:#E7EEFD;
+    --accent:#1450D8;
+    --accent-tint:#E7EEFD;
+    --good:#1A7A42;
+    --good-tint:#E4F3E9;
+    --warning:#966B12;
+    --warning-tint:#FBF0D6;
+    --critical:#B23A3A;
+    --critical-tint:#F6E1DF;
+    --shadow: 0 1px 2px rgba(20,80,216,0.08), 0 8px 24px -12px rgba(20,80,216,0.22);
+    color-scheme: light;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--surface);
+    color:var(--ink);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.display{
+    font-family:"Fraunces", ui-serif, Georgia, serif;
+    text-wrap:balance;
+    font-weight:600;
+    letter-spacing:-0.01em;
+  }
+  .mono, .amount, input[type="number"], input[type="date"]{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  button, input, select, textarea{ font-family:inherit; font-size:1rem; }
+  a{color:inherit;}
+  :focus-visible{ outline:2px solid var(--primary); outline-offset:2px; border-radius:4px; }
+  [hidden]{ display:none !important; }
+
+  #app-root{ min-height:100vh; display:flex; flex-direction:column; background:var(--surface); }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:20;
+    background:var(--surface-raised);
+    border-bottom:1px solid var(--border);
+    padding: calc(env(safe-area-inset-top,0px) + 10px) 16px 10px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .brand{ display:flex; align-items:baseline; gap:8px; min-width:0; }
+  .brand .mark{ font-family:"Fraunces",serif; font-weight:700; font-size:1.15rem; color:var(--primary); white-space:nowrap; }
+  .brand .co-name{ font-size:.82rem; color:var(--ink-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:none; background:transparent; padding:2px 4px; border-radius:4px; max-width:38vw; }
+  .brand .co-name:focus-visible{ background:#EEF3FF; }
+  .whoami{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .avatar{
+    width:30px; height:30px; border-radius:50%; background:var(--primary-tint); color:var(--primary);
+    display:flex; align-items:center; justify-content:center; font-weight:600; font-size:.8rem; flex-shrink:0;
+  }
+  .who-btn{ background:none; border:none; padding:0; display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--ink); }
+  .role-pill{
+    font-size:.68rem; text-transform:uppercase; letter-spacing:.04em; font-weight:600;
+    padding:2px 7px; border-radius:99px; background:var(--primary-tint); color:var(--primary); white-space:nowrap;
+  }
+  .role-pill.editor{ background:#EFEFEF; color:#333333; }
+
+  /* ---------- Main / views ---------- */
+  main{ flex:1; padding:16px 16px calc(88px + env(safe-area-inset-bottom,0px)); max-width:640px; width:100%; margin:0 auto; }
+  .view-head{ margin-bottom:16px; }
+  .view-head h1{ font-size:1.5rem; margin:0 0 2px; }
+  .view-head p{ margin:0; color:var(--ink-muted); font-size:.9rem; }
+
+  .stat-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px; }
+  .stat-tile{ background:var(--surface-raised); border:1px solid var(--border); border-radius:12px; padding:12px 10px; }
+  .stat-tile .label{ font-size:.7rem; color:var(--ink-muted); text-transform:uppercase; letter-spacing:.03em; }
+  .stat-tile .value{ font-size:1.15rem; font-weight:600; margin-top:4px; }
+  .stat-tile .value.money::before{ content:"Q "; color:var(--ink-faint); font-weight:400; }
+
+  .section-title{ display:flex; align-items:center; justify-content:space-between; margin:22px 0 8px; }
+  .section-title h2{ font-size:1rem; margin:0; }
+  .section-title .link-btn{ background:none;border:none;color:var(--primary);font-weight:600;font-size:.85rem;cursor:pointer;padding:4px; }
+
+  .quick-actions{ display:flex; gap:10px; }
+  .quick-actions .btn{ flex:1; }
+
+  .ledger{ display:flex; flex-direction:column; border:1px solid var(--border); border-radius:12px; overflow:hidden; background:var(--surface-raised); }
+  .ledger-row{
+    display:flex; align-items:center; gap:10px; padding:12px 14px;
+    border-bottom:1px solid var(--border); cursor:pointer; background:none; width:100%; text-align:left; color:var(--ink);
+  }
+  .ledger-row:last-child{ border-bottom:none; }
+  .ledger-row:hover{ background:#F3F6FF; }
+  .status-bar{ width:3px; align-self:stretch; border-radius:2px; background:var(--border); flex-shrink:0; }
+  .status-bar.good{ background:var(--good); }
+  .status-bar.warning{ background:var(--warning); }
+  .row-main{ flex:1; min-width:0; }
+  .row-main .title{ display:block; font-weight:600; font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row-main .sub{ display:block; font-size:.78rem; color:var(--ink-muted); margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row-amount{ text-align:right; flex-shrink:0; }
+  .row-amount .amt{ font-weight:600; font-size:.92rem; }
+  .row-amount .pill{ display:inline-block; margin-top:3px; font-size:.66rem; text-transform:uppercase; letter-spacing:.03em; font-weight:600; padding:1px 6px; border-radius:99px; }
+  .pill.pagado{ background:var(--good-tint); color:var(--good); }
+  .pill.pendiente{ background:var(--warning-tint); color:var(--warning); }
+  .pill.inactivo{ background:#EFEFEF; color:var(--ink-faint); }
+  .chev{ color:var(--ink-faint); flex-shrink:0; }
+
+  .empty-state{ text-align:center; padding:36px 16px; color:var(--ink-muted); border:1px dashed var(--border); border-radius:12px; }
+  .empty-state .display{ color:var(--ink); font-size:1.05rem; margin-bottom:4px; }
+
+  .search-bar{ display:flex; align-items:center; gap:8px; background:var(--surface-raised); border:1px solid var(--border); border-radius:10px; padding:9px 12px; margin-bottom:14px; }
+  .search-bar input{ border:none; background:none; flex:1; color:var(--ink); }
+  .search-bar input:focus{ outline:none; }
+  .search-bar svg{ color:var(--ink-faint); flex-shrink:0; }
+
+  .filter-chips{ display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; margin-bottom:14px; }
+  .chip{ flex-shrink:0; border:1px solid var(--border); background:var(--surface-raised); color:var(--ink-muted); padding:6px 12px; border-radius:99px; font-size:.8rem; cursor:pointer; white-space:nowrap; }
+  .chip.active{ background:var(--primary); color:var(--primary-ink); border-color:var(--primary); }
+
+  /* ---------- Buttons ---------- */
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:6px; border-radius:10px; border:1px solid transparent; padding:11px 16px; font-weight:600; font-size:.92rem; cursor:pointer; }
+  .btn-primary{ background:var(--primary); color:var(--primary-ink); }
+  .btn-secondary{ background:var(--surface-raised); color:var(--ink); border-color:var(--border); }
+  .btn-ghost{ background:none; color:var(--primary); }
+  .btn-danger{ background:none; color:var(--critical); }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .btn-block{ width:100%; }
+  .fab{
+    position:fixed; right:18px; bottom:calc(96px + env(safe-area-inset-bottom,0px)); z-index:15;
+    width:54px; height:54px; border-radius:50%; background:var(--primary); color:var(--primary-ink);
+    border:none; box-shadow:var(--shadow); display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+
+  /* ---------- Bottom nav ---------- */
+  nav.tabbar{
+    position:fixed; bottom:0; left:0; right:0; z-index:20;
+    background:var(--surface-raised); border-top:1px solid var(--border);
+    display:flex; padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));
+  }
+  nav.tabbar button{
+    flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:6px 2px; color:var(--ink-faint); cursor:pointer; border-radius:10px;
+  }
+  nav.tabbar button.active{ color:var(--primary); }
+  nav.tabbar button span{ font-size:.66rem; font-weight:600; }
+
+  /* ---------- Sheet / modal ---------- */
+  .sheet-backdrop{
+    position:fixed; inset:0; background:rgba(20,40,90,0.45); z-index:40;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+    opacity:0; pointer-events:none; transition:opacity .2s ease;
+  }
+  .sheet-backdrop.open{ opacity:1; pointer-events:auto; }
+  .sheet{
+    background:var(--surface-raised); width:100%; max-width:560px; max-height:min(88vh,760px); overflow-y:auto;
+    border:1px solid var(--border); border-radius:18px; padding:18px 18px calc(20px + env(safe-area-inset-bottom,0px));
+    transform:translateY(14px) scale(0.98); transition:transform .22s ease; box-shadow:var(--shadow);
+  }
+  .sheet-backdrop.open .sheet{ transform:translateY(0) scale(1); }
+  @media (prefers-reduced-motion: reduce){ .sheet-backdrop, .sheet{ transition:none; } }
+  .sheet-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .sheet-head h2{ margin:0; font-size:1.15rem; }
+  .icon-btn{ background:#EEF3FF; border:1px solid var(--border); width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--primary); cursor:pointer; flex-shrink:0; }
+
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:.78rem; font-weight:600; color:var(--ink-muted); margin-bottom:5px; text-transform:uppercase; letter-spacing:.02em; }
+  .field input, .field select, .field textarea{
+    width:100%; border:1px solid var(--border); background:var(--surface); color:var(--ink);
+    border-radius:9px; padding:10px 12px;
+  }
+  .field textarea{ resize:vertical; min-height:60px; font-family:inherit; }
+  .field .hint{ font-size:.76rem; color:var(--ink-faint); margin-top:4px; }
+  .field-row{ display:flex; gap:10px; }
+  .field-row .field{ flex:1; }
+  .radio-group{ display:flex; gap:8px; flex-wrap:wrap; }
+  .radio-chip{ flex:1; min-width:90px; }
+  .radio-chip input{ position:absolute; opacity:0; pointer-events:none; }
+  .radio-chip span{
+    display:block; text-align:center; border:1px solid var(--border); border-radius:9px; padding:9px 6px;
+    font-size:.82rem; font-weight:600; color:var(--ink-muted); cursor:pointer;
+  }
+  .radio-chip input:checked + span{ border-color:var(--primary); background:var(--primary-tint); color:var(--primary); }
+
+  .switch-card{ display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--primary-tint); border:1px solid var(--primary); border-radius:12px; padding:12px 14px; margin-bottom:6px; }
+  .switch-card .switch-text{ min-width:0; }
+  .switch-card .switch-text .t1{ font-weight:700; font-size:.9rem; }
+  .switch-card .switch-text .t2{ font-size:.78rem; color:var(--ink-muted); margin-top:1px; }
+  .switch{ position:relative; display:inline-block; width:50px; height:29px; flex-shrink:0; }
+  .switch input{ position:absolute; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .switch-track{ position:absolute; inset:0; background:#C7D2EA; border-radius:99px; transition:background .15s ease; }
+  .switch-track::before{ content:""; position:absolute; top:3px; left:3px; width:23px; height:23px; background:#fff; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.25); transition:transform .15s ease; }
+  .switch input:checked + .switch-track{ background:var(--primary); }
+  .switch input:checked + .switch-track::before{ transform:translateX(21px); }
+  .switch input:focus-visible + .switch-track{ outline:2px solid var(--primary); outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce){ .switch-track, .switch-track::before{ transition:none; } }
+
+  .breakdown{ background:var(--surface-sunken); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin:6px 0 16px; }
+  .breakdown-row{ display:flex; justify-content:space-between; font-size:.86rem; padding:3px 0; color:var(--ink-muted); }
+  .breakdown-row.total{ border-top:1px solid var(--border); margin-top:6px; padding-top:8px; font-weight:700; color:var(--ink); font-size:1rem; }
+  .breakdown-row .amt{ font-family:"IBM Plex Mono",monospace; }
+  .disclaimer{ font-size:.74rem; color:var(--ink-faint); line-height:1.4; margin-top:2px; }
+
+  .loan-check{ display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--border); cursor:pointer; }
+  .loan-check:last-child{ border-bottom:none; }
+  .loan-check input{ width:18px; height:18px; accent-color:var(--primary); flex-shrink:0; }
+  .loan-check .lc-text{ flex:1; min-width:0; }
+  .loan-check .lc-text .t1{ font-size:.86rem; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .loan-check .lc-text .t2{ font-size:.74rem; color:var(--ink-muted); }
+  .loan-check .lc-amt{ font-family:"IBM Plex Mono",monospace; font-size:.86rem; font-weight:600; color:var(--critical); flex-shrink:0; }
+
+  .row-action{ padding:7px 14px; font-size:.8rem; flex-shrink:0; }
+  .pay-row{ cursor:default; }
+  .pay-count{ font-size:.82rem; color:var(--ink-muted); margin-bottom:12px; }
+  .signature-box{ border:1px solid var(--border); border-radius:12px; overflow:hidden; background:#fff; touch-action:none; }
+  .signature-box canvas{ width:100%; height:170px; display:block; touch-action:none; }
+  .signature-img-box{ border:1px solid var(--border); border-radius:12px; overflow:hidden; background:#fff; padding:8px; }
+  .signature-img-box img{ width:100%; display:block; }
+
+  /* ---------- Auth screen ---------- */
+  .auth-screen{ min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px 20px; text-align:center; background:var(--surface); }
+  .auth-screen .mark-big{ font-family:"Fraunces",serif; font-weight:700; font-size:2rem; color:var(--primary); }
+  .auth-screen .tag{ color:var(--ink-muted); font-size:.92rem; margin:2px 0 28px; }
+  .auth-card{ background:var(--surface-raised); border:1px solid var(--border); border-radius:14px; padding:20px; width:100%; max-width:340px; text-align:left; box-shadow:var(--shadow); }
+
+  .toast-root{ position:fixed; top:calc(env(safe-area-inset-top,0px) + 60px); left:50%; transform:translateX(-50%); z-index:60; display:flex; flex-direction:column; gap:8px; align-items:center; width:calc(100% - 32px); max-width:420px; }
+  .toast{ background:var(--ink); color:var(--surface); padding:10px 16px; border-radius:9px; font-size:.85rem; box-shadow:var(--shadow); text-align:center; }
+  .toast.error{ background:var(--critical); color:#fff; }
+
+  .banner{ background:var(--warning-tint); color:var(--warning); border-radius:10px; padding:10px 14px; font-size:.82rem; margin-bottom:16px; }
+  .divider-label{ font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:600; margin:18px 0 8px; }
+</style>
+</head>
+<body>
+
+<div id="app-root">
+
+  <div id="auth-screen" class="auth-screen" hidden></div>
+
+  <div id="main-shell" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">🧾 Q</span>
+        <select id="empresa-switcher" class="co-name"></select>
+      </div>
+      <button class="who-btn" id="who-btn" title="Cerrar sesión">
+        <span class="role-pill" id="role-pill-header">—</span>
+        <span class="avatar" id="header-avatar">?</span>
+      </button>
+    </header>
+
+    <main>
+      <section id="view-resumen"></section>
+      <section id="view-empleados" hidden></section>
+      <section id="view-nomina" hidden></section>
+      <section id="view-comisiones" hidden></section>
+      <section id="view-equipo" hidden></section>
+      <section id="view-sin-empresa" hidden></section>
+    </main>
+
+    <button class="fab" id="fab-btn" title="Registrar pago" aria-label="Acción rápida">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+
+    <nav class="tabbar" id="tabbar">
+      <button data-tab="resumen" class="active">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 19V10M12 19V5M20 19v-7"/></svg>
+        <span>Resumen</span>
+      </button>
+      <button data-tab="empleados">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1.2-3.6 4-5.4 7-5.4s5.8 1.8 7 5.4"/></svg>
+        <span>Empleados</span>
+      </button>
+      <button data-tab="nomina">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
+        <span>Nómina</span>
+      </button>
+      <button data-tab="comisiones">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M9 11l3-3 3 3"/></svg>
+        <span>Comisiones</span>
+      </button>
+      <button data-tab="equipo" id="tab-equipo-btn">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="9" r="3"/><circle cx="16" cy="10.5" r="2.6"/><path d="M3.5 19c.9-3.2 3-4.8 5.5-4.8s4.6 1.6 5.5 4.8M14.3 15c2 .3 3.5 1.7 4.1 4"/></svg>
+        <span>Equipo</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="sheet-root"></div>
+  <div class="toast-root" id="toast-root"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+import {
+  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, limit
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAFePSvFSCU-uhWclhsxkKo7qXJLpPd1BA",
+  authDomain: "nomina-quetzal.firebaseapp.com",
+  projectId: "nomina-quetzal",
+  storageBucket: "nomina-quetzal.firebasestorage.app",
+  messagingSenderId: "993723149578",
+  appId: "1:993723149578:web:bd7179f8d58f175546def3",
+  measurementId: "G-P4NF545YRG"
+};
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const firestore = getFirestore(fbApp);
+
+function buildDbShim(fsDb){
+  function wrapSnap(s){ return { id: s.id, exists: s.exists(), data: function(){ return s.data(); } }; }
+  function makeDocRef(collName, id){
+    var ref = doc(fsDb, collName, id);
+    return {
+      id: id,
+      set: function(data){ return setDoc(ref, data); },
+      update: function(data){ return updateDoc(ref, data); },
+      delete: function(){ return deleteDoc(ref); },
+      onSnapshot: function(next, err){ return onSnapshot(ref, function(s){ next(wrapSnap(s)); }, err); }
+    };
+  }
+  function makeCollRef(collName, constraints){
+    constraints = constraints || [];
+    var colRef = collection(fsDb, collName);
+    function built(){ return constraints.length ? query.apply(null, [colRef].concat(constraints)) : colRef; }
+    return {
+      doc: function(id){ return makeDocRef(collName, id); },
+      add: function(data){ return addDoc(colRef, data).then(function(r){ return makeDocRef(collName, r.id); }); },
+      orderBy: function(field, dir){ return makeCollRef(collName, constraints.concat([orderBy(field, dir||'asc')])); },
+      limit: function(n){ return makeCollRef(collName, constraints.concat([limit(n)])); },
+      onSnapshot: function(next, err){
+        return onSnapshot(built(), function(snap){ next({ docs: snap.docs.map(wrapSnap) }); }, err);
+      }
+    };
+  }
+  return { collection: function(name){ return makeCollRef(name); } };
+}
+
+(function(){
+  "use strict";
+
+  /* ============================ CONSTANTS ============================ */
+  var IGSS_RATE_DEFAULT = 0.0483;
+  var ISR_TASA1_DEFAULT = 0.05;
+  var ISR_TOPE1_DEFAULT = 300000;
+  var ISR_TASA2_DEFAULT = 0.07;
+  var EXENCION_ANUAL_ISR_DEFAULT = 48000;
+  var DEFAULT_BONIFICACION = 250;
+  var MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+  function round2(n){ return Math.round((Number(n)||0) * 100) / 100; }
+  function round4(n){ return Math.round((Number(n)||0) * 10000) / 10000; }
+  function fmtPctNum(fraccion){ return Math.round((Number(fraccion)||0) * 10000) / 100; }
+  function fmtPct(fraccion){ return fmtPctNum(fraccion) + '%'; }
+  function fmtQ(n){
+    var v = round2(n);
+    var neg = v < 0;
+    var s = Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    return (neg? "-Q " : "Q ") + s;
+  }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+  function initials(name){
+    var parts = String(name||"?").trim().split(/\s+/);
+    return ((parts[0]||"")[0]||"?").toUpperCase() + ((parts[1]||"")[0]||"").toUpperCase();
+  }
+  function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+  function getIgssRate(){
+    var v = empresaActual().igssRate;
+    return (v != null && !isNaN(v)) ? Number(v) : IGSS_RATE_DEFAULT;
+  }
+  function getIsrParams(){
+    var c = empresaActual();
+    return {
+      tasa1: (c.isrTasa1 != null && !isNaN(c.isrTasa1)) ? Number(c.isrTasa1) : ISR_TASA1_DEFAULT,
+      tope1: (c.isrTope1 != null && !isNaN(c.isrTope1)) ? Number(c.isrTope1) : ISR_TOPE1_DEFAULT,
+      tasa2: (c.isrTasa2 != null && !isNaN(c.isrTasa2)) ? Number(c.isrTasa2) : ISR_TASA2_DEFAULT,
+      exencion: (c.isrExencionAnual != null && !isNaN(c.isrExencionAnual)) ? Number(c.isrExencionAnual) : EXENCION_ANUAL_ISR_DEFAULT
+    };
+  }
+  function calcularIGSSMensual(salarioBaseMensual){ return round2(salarioBaseMensual * getIgssRate()); }
+  function calcularISRMensual(salarioBaseMensual, igssMensual){
+    var p = getIsrParams();
+    var salarioAnual = salarioBaseMensual * 12;
+    var igssAnual = igssMensual * 12;
+    var rentaImponible = Math.max(0, salarioAnual - p.exencion - igssAnual);
+    var isrAnual = rentaImponible <= p.tope1 ? rentaImponible * p.tasa1 : (p.tope1 * p.tasa1) + (rentaImponible - p.tope1) * p.tasa2;
+    return round2(isrAnual / 12);
+  }
+  function calcularDesglose(salarioBaseMensual, bonificacionMensual, periodoTipo, otrasDeducciones, igssActivo, isrActivo, fraccionQuincena1, diasInfo){
+    salarioBaseMensual = Number(salarioBaseMensual)||0;
+    bonificacionMensual = Number(bonificacionMensual)||0;
+    otrasDeducciones = Number(otrasDeducciones)||0;
+    igssActivo = igssActivo !== false;
+    isrActivo = isrActivo !== false;
+    var fraccion;
+    if(periodoTipo === 'mensual'){ fraccion = 1; }
+    else {
+      var f1 = (fraccionQuincena1 != null && !isNaN(fraccionQuincena1)) ? Math.min(1, Math.max(0, fraccionQuincena1)) : 0.5;
+      fraccion = periodoTipo === 'quincena1' ? f1 : (1 - f1);
+    }
+    var ratio = diasInfo ? (diasInfo.diasPeriodo > 0 ? diasInfo.diasTrabajados / diasInfo.diasPeriodo : 0) : 1;
+    var salarioFraccion = fraccion * ratio;
+    var bonoFraccion = (periodoTipo === 'mensual' ? 1 : 0.5) * ratio;
+    var igssMensual = igssActivo ? calcularIGSSMensual(salarioBaseMensual) : 0;
+    var isrMensual = isrActivo ? calcularISRMensual(salarioBaseMensual, igssMensual) : 0;
+    var salarioBase = round2(salarioBaseMensual * salarioFraccion);
+    var bonificacion = round2(bonificacionMensual * bonoFraccion);
+    var igss = round2(igssMensual * salarioFraccion);
+    var isr = round2(isrMensual * salarioFraccion);
+    var salarioBruto = round2(salarioBase + bonificacion);
+    var totalDeducciones = round2(igss + isr + otrasDeducciones);
+    var totalNeto = round2(salarioBruto - totalDeducciones);
+    return { salarioBase:salarioBase, bonificacion:bonificacion, salarioBruto:salarioBruto, igss:igss, isr:isr, otrasDeducciones:otrasDeducciones, totalDeducciones:totalDeducciones, totalNeto:totalNeto };
+  }
+  function calcularDiasTrabajados(fechaIngreso, fechaPago, periodoTipo){
+    if(!fechaIngreso || !fechaPago) return null;
+    var ingresoYM = fechaIngreso.slice(0,7);
+    var pagoYM = fechaPago.slice(0,7);
+    var diasPeriodo = periodoTipo === 'mensual' ? 30 : 15;
+    if(ingresoYM < pagoYM) return null;
+    if(ingresoYM > pagoYM) return { diasTrabajados: 0, diasPeriodo: diasPeriodo };
+    var diaIngreso = Math.min(30, parseInt(fechaIngreso.slice(8,10),10) || 1);
+    var diaInicio = periodoTipo === 'quincena2' ? 16 : 1;
+    var diaFin = diaInicio + diasPeriodo - 1;
+    if(diaIngreso <= diaInicio) return null;
+    if(diaIngreso > diaFin) return { diasTrabajados: 0, diasPeriodo: diasPeriodo };
+    return { diasTrabajados: diaFin - diaIngreso + 1, diasPeriodo: diasPeriodo };
+  }
+  function empIgssActivo(emp){ return emp.igssActivo !== false; }
+  function empIsrActivo(emp){ return emp.isrActivo !== false; }
+  function empresasAccesibles(){
+    if(!state.session) return [];
+    var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
+    var ids = (miembro && miembro.empresasAcceso) || [];
+    return state.empresas.filter(function(em){ return ids.indexOf(em.id) > -1; });
+  }
+  function empresaActual(){
+    return state.empresas.find(function(em){ return em.id === state.empresaActualId; }) || {};
+  }
+  function sincronizarEmpresaActual(){
+    var accesibles = empresasAccesibles();
+    if(!accesibles.length){ state.empresaActualId = null; return; }
+    if(!state.empresaActualId || !accesibles.some(function(em){ return em.id === state.empresaActualId; })){
+      state.empresaActualId = accesibles[0].id;
+    }
+  }
+  function ordenarPorIngreso(list){
+    return list.slice().sort(function(a,b){
+      var fa = a.fechaIngreso || '9999-99-99';
+      var fb = b.fechaIngreso || '9999-99-99';
+      return fa.localeCompare(fb);
+    });
+  }
+  function calcularAntiguedad(fechaIngreso){
+    if(!fechaIngreso) return null;
+    var inicio = new Date(fechaIngreso + 'T00:00:00');
+    var hoy = new Date();
+    if(isNaN(inicio.getTime()) || inicio > hoy) return null;
+    var years = hoy.getFullYear() - inicio.getFullYear();
+    var months = hoy.getMonth() - inicio.getMonth();
+    var days = hoy.getDate() - inicio.getDate();
+    if(days < 0){
+      months -= 1;
+      days += new Date(hoy.getFullYear(), hoy.getMonth(), 0).getDate();
+    }
+    if(months < 0){ years -= 1; months += 12; }
+    return { years: years, months: months, days: days };
+  }
+  function fmtAntiguedad(fechaIngreso){
+    var a = calcularAntiguedad(fechaIngreso);
+    if(!a) return '—';
+    var parts = [];
+    if(a.years) parts.push(a.years + (a.years === 1 ? ' año' : ' años'));
+    if(a.months) parts.push(a.months + (a.months === 1 ? ' mes' : ' meses'));
+    if(a.days || parts.length === 0) parts.push(a.days + (a.days === 1 ? ' día' : ' días'));
+    return parts.join(', ');
+  }
+  function empFraccionQuincena1(emp){
+    var total = Number(emp.salarioBase)||0;
+    if(!total || emp.salarioQuincena1 == null) return 0.5;
+    return Math.min(1, Math.max(0, Number(emp.salarioQuincena1)/total));
+  }
+  function computeProyeccionMes(){
+    var activos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
+    var hoy = todayISO();
+    var totalQ1 = 0, totalQ2 = 0;
+    activos.forEach(function(e){
+      var loanQuincenal = state.prestamos.filter(function(l){ return l.empleadoId === e.id && l.estado === 'activo' && l.frecuencia === 'quincenal'; })
+        .reduce(function(s,l){ return s + round2(Math.min(l.montoCuota, l.saldoPendiente)); }, 0);
+      var igssOn = empIgssActivo(e), isrOn = empIsrActivo(e), f1 = empFraccionQuincena1(e);
+      var bono = e.bonificacion != null ? e.bonificacion : DEFAULT_BONIFICACION;
+      var diasQ1 = calcularDiasTrabajados(e.fechaIngreso, hoy, 'quincena1');
+      var diasQ2 = calcularDiasTrabajados(e.fechaIngreso, hoy, 'quincena2');
+      var bQ1 = calcularDesglose(e.salarioBase, bono, 'quincena1', loanQuincenal, igssOn, isrOn, f1, diasQ1);
+      var bQ2 = calcularDesglose(e.salarioBase, bono, 'quincena2', loanQuincenal, igssOn, isrOn, f1, diasQ2);
+      totalQ1 += bQ1.totalNeto;
+      totalQ2 += bQ2.totalNeto;
+    });
+    return { totalQ1: round2(totalQ1), totalQ2: round2(totalQ2), total: round2(totalQ1 + totalQ2) };
+  }
+  function periodoEtiqueta(fechaISO, periodoTipo){
+    var d = new Date(fechaISO + "T00:00:00");
+    var mes = MESES[d.getMonth()] || "";
+    var anio = d.getFullYear();
+    var pre = periodoTipo === 'mensual' ? 'Mensual' : (periodoTipo === 'quincena1' ? 'Q1' : 'Q2');
+    return pre + " · " + mes + " " + anio;
+  }
+
+  /* ============================ STATE ============================ */
+  var state = {
+    db: buildDbShim(firestore),
+    authUser: null,
+    session: null, // {id, nombre, rol}
+    empleados: [],
+    pagos: [],
+    prestamos: [],
+    comisiones: [],
+    equipo: [],
+    empresas: [],
+    empresaActualId: null,
+    tab: "resumen",
+    filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "" }
+  };
+
+  function toast(msg, isError){
+    var root = document.getElementById('toast-root');
+    var el = document.createElement('div');
+    el.className = 'toast' + (isError? ' error':'');
+    el.textContent = msg;
+    root.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 3400);
+  }
+
+  /* ============================ SHEET (modal) ============================ */
+  var activeSheetCleanup = null;
+  function openSheet(titleHtml, bodyHtml, onMount){
+    var root = document.getElementById('sheet-root');
+    root.innerHTML =
+      '<div class="sheet-backdrop" id="sheet-backdrop">' +
+        '<div class="sheet" role="dialog" aria-modal="true">' +
+          '<div class="sheet-head"><h2>'+titleHtml+'</h2>' +
+            '<button class="icon-btn" id="sheet-close" aria-label="Cerrar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>' +
+          '</div>' +
+          '<div id="sheet-body">'+bodyHtml+'</div>' +
+        '</div>' +
+      '</div>';
+    var backdrop = document.getElementById('sheet-backdrop');
+    requestAnimationFrame(function(){ backdrop.classList.add('open'); });
+    backdrop.addEventListener('click', function(e){ if(e.target === backdrop) closeSheet(); });
+    document.getElementById('sheet-close').addEventListener('click', closeSheet);
+    if(onMount) onMount(document.getElementById('sheet-body'));
+  }
+  function closeSheet(){
+    if(activeSheetCleanup){ activeSheetCleanup(); activeSheetCleanup = null; }
+    var backdrop = document.getElementById('sheet-backdrop');
+    if(!backdrop) return;
+    backdrop.classList.remove('open');
+    setTimeout(function(){ document.getElementById('sheet-root').innerHTML = ''; }, 220);
+  }
+
+  /* ============================ FIRESTORE LISTENERS ============================ */
+  var listenersStarted = false;
+  function initFirestoreListeners(){
+    if(listenersStarted) return;
+    listenersStarted = true;
+    var db = state.db;
+
+    db.collection('empleados').onSnapshot(function(snap){
+      state.empleados = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ toast('No se pudo sincronizar empleados: ' + err.code, true); });
+
+    db.collection('pagos').orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
+      state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ toast('No se pudo sincronizar pagos: ' + err.code, true); });
+
+    db.collection('prestamos').onSnapshot(function(snap){
+      state.prestamos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ toast('No se pudo sincronizar préstamos: ' + err.code, true); });
+
+    db.collection('comisiones').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+      state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ toast('No se pudo sincronizar comisiones: ' + err.code, true); });
+
+    db.collection('equipo').onSnapshot(function(snap){
+      state.equipo = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      checkProfileAndRender();
+    }, function(err){ toast('No se pudo sincronizar el equipo: ' + err.code, true); });
+
+    db.collection('empresas').onSnapshot(function(snap){
+      state.empresas = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ toast('No se pudo sincronizar empresas: ' + err.code, true); });
+  }
+
+  /* ============================ AUTENTICACIÓN (Firebase Auth) ============================ */
+  function showAuthScreen(html){
+    document.getElementById('main-shell').hidden = true;
+    var authEl = document.getElementById('auth-screen');
+    authEl.hidden = false;
+    authEl.innerHTML = html;
+  }
+
+  function showLoginScreen(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Inicia sesión</p>' +
+      '<div class="auth-card">' +
+        '<div class="field"><label for="li-email">Correo</label><input id="li-email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="username"/></div>' +
+        '<div class="field"><label for="li-pass">Contraseña</label><input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>' +
+        '<button class="btn btn-primary btn-block" id="li-submit">Entrar</button>' +
+        '<button class="btn btn-ghost btn-block" id="li-forgot" style="margin-top:6px;">¿Olvidaste tu contraseña?</button>' +
+      '</div>'
+    );
+    document.getElementById('li-submit').addEventListener('click', async function(){
+      var email = document.getElementById('li-email').value.trim();
+      var pass = document.getElementById('li-pass').value;
+      if(!email || !pass){ toast('Escribe tu correo y contraseña', true); return; }
+      try{ await signInWithEmailAndPassword(auth, email, pass); }
+      catch(e){ toast('No se pudo entrar: correo o contraseña incorrectos', true); }
+    });
+    document.getElementById('li-forgot').addEventListener('click', async function(){
+      var email = document.getElementById('li-email').value.trim();
+      if(!email){ toast('Escribe tu correo arriba primero', true); return; }
+      try{ await sendPasswordResetEmail(auth, email); toast('Te enviamos un correo para restablecer tu contraseña'); }
+      catch(e){ toast('No se pudo enviar el correo: '+(e.code||''), true); }
+    });
+  }
+
+  function showCrearPerfilPrimerUsuario(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Configura tu cuenta para empezar</p>' +
+      '<div class="auth-card">' +
+        '<div class="field"><label for="onb-nombre">Tu nombre</label><input id="onb-nombre" placeholder="Ej. María López"/></div>' +
+        '<div class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
+        '<p class="disclaimer" style="margin-bottom:14px;">Serás la primera persona del equipo, con rol <strong>Administrador</strong>.</p>' +
+        '<button class="btn btn-primary btn-block" id="onb-submit">Crear</button>' +
+      '</div>'
+    );
+    document.getElementById('onb-submit').addEventListener('click', async function(){
+      var nombre = document.getElementById('onb-nombre').value.trim();
+      var empresaNombre = document.getElementById('onb-empresa').value.trim();
+      if(!nombre){ toast('Escribe tu nombre', true); return; }
+      if(!empresaNombre){ toast('Escribe el nombre de tu empresa', true); return; }
+      try{
+        var empresaRef = await state.db.collection('empresas').add({ nombre: empresaNombre, creadaPor: nombre, creadaEn: new Date().toISOString() });
+        await state.db.collection('equipo').doc(state.authUser.uid).set({
+          nombre: nombre, rol: 'administrador', empresasAcceso: [empresaRef.id], activo: true,
+          email: state.authUser.email, creadoEn: new Date().toISOString()
+        });
+        state.empresaActualId = empresaRef.id;
+      }catch(e){ toast('No se pudo crear: '+(e.code||''), true); }
+    });
+  }
+
+  function showCompletarPerfil(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Completa tu perfil</p>' +
+      '<div class="auth-card">' +
+        '<div class="field"><label for="cp-nombre">Tu nombre</label><input id="cp-nombre" placeholder="Ej. Carlos Ruiz"/></div>' +
+        '<p class="disclaimer" style="margin-bottom:14px;">Un Administrador deberá darte acceso a una empresa desde Equipo → Empresas.</p>' +
+        '<button class="btn btn-primary btn-block" id="cp-submit">Continuar</button>' +
+      '</div>'
+    );
+    document.getElementById('cp-submit').addEventListener('click', async function(){
+      var nombre = document.getElementById('cp-nombre').value.trim();
+      if(!nombre){ toast('Escribe tu nombre', true); return; }
+      try{
+        await state.db.collection('equipo').doc(state.authUser.uid).set({
+          nombre: nombre, rol: 'editor', empresasAcceso: [], activo: true,
+          email: state.authUser.email, creadoEn: new Date().toISOString()
+        });
+      }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+    });
+  }
+
+  function showCuentaDesactivada(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<div class="auth-card"><p style="margin:0 0 14px;">Tu cuenta fue desactivada. Contacta a un Administrador.</p>' +
+      '<button class="btn btn-secondary btn-block" id="cd-salir">Cerrar sesión</button></div>'
+    );
+    document.getElementById('cd-salir').addEventListener('click', function(){ signOut(auth); });
+  }
+
+  function checkProfileAndRender(){
+    if(!state.authUser) return;
+    var miDoc = state.equipo.find(function(m){ return m.id === state.authUser.uid; });
+    if(miDoc){
+      if(miDoc.activo === false){ showCuentaDesactivada(); return; }
+      state.session = { id: miDoc.id, nombre: miDoc.nombre, rol: miDoc.rol };
+      document.getElementById('auth-screen').hidden = true;
+      document.getElementById('main-shell').hidden = false;
+      render();
+      return;
+    }
+    state.session = null;
+    if(state.equipo.length === 0){ showCrearPerfilPrimerUsuario(); }
+    else { showCompletarPerfil(); }
+  }
+
+  onAuthStateChanged(auth, function(user){
+    if(user){
+      state.authUser = { uid: user.uid, email: user.email };
+      initFirestoreListeners();
+      checkProfileAndRender();
+    } else {
+      state.authUser = null;
+      state.session = null;
+      showLoginScreen();
+    }
+  });
+
+  function updateHeaderIdentity(){
+    document.getElementById('header-avatar').textContent = initials(state.session.nombre);
+    var pill = document.getElementById('role-pill-header');
+    pill.textContent = state.session.rol === 'administrador' ? 'Admin' : 'Editor';
+    pill.className = 'role-pill' + (state.session.rol === 'administrador' ? '' : ' editor');
+    document.getElementById('tab-equipo-btn').hidden = state.session.rol !== 'administrador';
+    if(state.tab === 'equipo' && state.session.rol !== 'administrador'){ state.tab = 'resumen'; }
+    var accesibles = empresasAccesibles();
+    var sel = document.getElementById('empresa-switcher');
+    sel.innerHTML = accesibles.map(function(em){ return '<option value="'+em.id+'"'+(em.id===state.empresaActualId?' selected':'')+'>'+esc(em.nombre)+'</option>'; }).join('');
+  }
+
+  function renderSinEmpresa(){
+    var el = document.getElementById('view-sin-empresa');
+    var admins = state.equipo.filter(function(m){ return m.rol === 'administrador' && m.activo !== false; });
+    el.innerHTML =
+      '<div class="empty-state" style="margin-top:40px;"><div class="display">Sin acceso a ninguna empresa</div>Pide a un Administrador que te asigne una desde Equipo → Empresas.'+
+      (admins.length? ' Administrador'+(admins.length>1?'es':'')+': '+admins.map(function(a){return esc(a.nombre);}).join(', ')+'.' : '')+'</div>';
+  }
+
+  /* ============================ RENDER: ROOT ============================ */
+  function render(){
+    if(!state.session) return;
+    sincronizarEmpresaActual();
+    updateHeaderIdentity();
+    var sinEmpresa = !state.empresaActualId && state.tab !== 'equipo';
+    document.querySelectorAll('#tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === state.tab); });
+    document.getElementById('fab-btn').style.display = (sinEmpresa || state.tab === 'equipo') ? 'none' : 'flex';
+    ['resumen','empleados','nomina','comisiones','equipo','sin-empresa'].forEach(function(t){
+      document.getElementById('view-'+t).hidden = true;
+    });
+    if(sinEmpresa){ document.getElementById('view-sin-empresa').hidden = false; renderSinEmpresa(); return; }
+    document.getElementById('view-'+state.tab).hidden = false;
+    if(state.tab === 'resumen') renderResumen();
+    if(state.tab === 'empleados') renderEmpleados();
+    if(state.tab === 'nomina') renderNomina();
+    if(state.tab === 'comisiones') renderComisiones();
+    if(state.tab === 'equipo') renderEquipo();
+  }
+
+  /* ============================ RESUMEN ============================ */
+  function renderResumen(){
+    var el = document.getElementById('view-resumen');
+    var empleadosActivos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
+    var ym = todayISO().slice(0,7);
+    var pagosEmpresa = state.pagos.filter(function(p){ return p.empresaId === state.empresaActualId; });
+    var pagosMes = pagosEmpresa.filter(function(p){ return (p.fechaPago||'').slice(0,7) === ym; });
+    var netoMes = pagosMes.reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0);
+    var deduccionesMes = pagosMes.reduce(function(s,p){ return s + (Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeducciones)||0); }, 0);
+    var recientes = pagosEmpresa.slice(0,5);
+    var proy = computeProyeccionMes();
+
+    el.innerHTML =
+      '<div class="view-head"><h1>Resumen</h1><p>'+esc(MESES[new Date().getMonth()])+' '+new Date().getFullYear()+'</p></div>' +
+      '<div class="stat-row">' +
+        '<div class="stat-tile"><div class="label">Empleados</div><div class="value">'+empleadosActivos.length+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Nómina neta (mes)</div><div class="value money">'+netoMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Deducciones (mes)</div><div class="value money">'+deduccionesMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
+      '</div>' +
+      '<div class="divider-label" style="margin-top:0;">Total nómina</div>' +
+      '<div class="breakdown">' +
+        '<div class="breakdown-row total"><span>Total nómina</span><span class="amt">'+fmtQ(proy.total)+'</span></div>' +
+        '<div class="breakdown-row"><span>Pago primera quincena</span><span class="amt">'+fmtQ(proy.totalQ1)+'</span></div>' +
+        '<div class="breakdown-row"><span>Pago segunda quincena</span><span class="amt">'+fmtQ(proy.totalQ2)+'</span></div>' +
+      '</div>' +
+      '<button class="btn btn-primary btn-block" id="qa-pagar-sueldos" style="margin-bottom:10px;">Pagar sueldos</button>' +
+      '<div class="quick-actions">' +
+        '<button class="btn btn-secondary" id="qa-pago">+ Registrar pago</button>' +
+        '<button class="btn btn-secondary" id="qa-empleado">+ Empleado</button>' +
+      '</div>' +
+      '<div class="section-title"><h2>Pagos recientes</h2><button class="link-btn" id="ver-todos-pagos">Ver todos</button></div>' +
+      '<div id="recientes-wrap"></div>';
+
+    document.getElementById('qa-pagar-sueldos').addEventListener('click', openPagarSueldos);
+    document.getElementById('qa-pago').addEventListener('click', openPagoForm);
+    document.getElementById('qa-empleado').addEventListener('click', function(){ openEmpleadoForm(null); });
+    document.getElementById('ver-todos-pagos').addEventListener('click', function(){ state.tab='nomina'; render(); });
+
+    var wrap = document.getElementById('recientes-wrap');
+    if(recientes.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Aún no hay pagos</div>Registra el primer pago de tu equipo.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + recientes.map(pagoRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, recientes, openPagoDetail);
+    }
+  }
+
+  /* ============================ EMPLEADOS ============================ */
+  function renderEmpleados(){
+    var el = document.getElementById('view-empleados');
+    var q = state.filters.empleadosQuery.toLowerCase();
+    var list = ordenarPorIngreso(state.empleados.filter(function(e){
+      if(e.empresaId !== state.empresaActualId) return false;
+      if(!state.filters.mostrarArchivados && e.activo === false) return false;
+      return !q || (e.nombre||'').toLowerCase().indexOf(q) > -1 || (e.puesto||'').toLowerCase().indexOf(q) > -1;
+    }));
+
+    el.innerHTML =
+      '<div class="view-head"><h1>Empleados</h1><p>'+state.empleados.filter(function(e){return e.activo!==false && e.empresaId===state.empresaActualId;}).length+' activos</p></div>' +
+      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="emp-search" placeholder="Buscar por nombre o puesto" value="'+esc(state.filters.empleadosQuery)+'"/></div>' +
+      '<div class="filter-chips"><button class="chip'+(state.filters.mostrarArchivados?' active':'')+'" id="chip-archivados">'+(state.filters.mostrarArchivados?'Ocultar archivados':'Mostrar archivados')+'</button></div>' +
+      '<div id="empleados-wrap"></div>';
+
+    document.getElementById('emp-search').addEventListener('input', function(e){ state.filters.empleadosQuery = e.target.value; renderEmpleados(); });
+    document.getElementById('chip-archivados').addEventListener('click', function(){ state.filters.mostrarArchivados = !state.filters.mostrarArchivados; renderEmpleados(); });
+
+    var wrap = document.getElementById('empleados-wrap');
+    if(list.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin resultados</div>Agrega un empleado con el botón + de abajo.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + list.map(empleadoRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, list, openEmpleadoDetail);
+    }
+  }
+
+  function empleadoRowHtml(e){
+    var activo = e.activo !== false;
+    var sub = esc(e.puesto || 'Sin puesto') + ' · ' + fmtAntiguedad(e.fechaIngreso);
+    return '<button class="ledger-row" data-id="'+e.id+'">' +
+      '<span class="status-bar'+(activo?' good':'')+'"></span>' +
+      '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+sub+'</span></span>' +
+      '<span class="row-amount"><span class="amt">'+fmtQ(e.salarioBase)+'</span>'+(activo?'':'<span class="pill inactivo">Archivado</span>')+'</span>' +
+      '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+    '</button>';
+  }
+
+  function wireLedgerRows(container, list, handler){
+    container.querySelectorAll('.ledger-row').forEach(function(row){
+      row.addEventListener('click', function(){
+        var item = list.find(function(x){ return x.id === row.dataset.id; });
+        if(item) handler(item);
+      });
+    });
+  }
+
+  function openEmpleadoForm(existing){
+    var isEdit = !!existing;
+    var igssOn = existing ? empIgssActivo(existing) : true;
+    var isrOn = existing ? empIsrActivo(existing) : true;
+    var body =
+      '<div class="field switch-card">' +
+        '<div class="switch-text"><div class="t1">IGSS ('+fmtPct(getIgssRate())+')</div><div class="t2" id="f-igss-hint">'+(igssOn?'Activado: se descuenta en cada pago.':'Desactivado: no se descuenta.')+'</div></div>' +
+        '<label class="switch"><input type="checkbox" id="f-igss-toggle" '+(igssOn?'checked':'')+'/><span class="switch-track"></span></label>' +
+      '</div>' +
+      '<div class="field switch-card">' +
+        '<div class="switch-text"><div class="t1">ISR</div><div class="t2" id="f-isr-hint">'+(isrOn?'Activado: se descuenta en cada pago.':'Desactivado: no se descuenta.')+'</div></div>' +
+        '<label class="switch"><input type="checkbox" id="f-isr-toggle" '+(isrOn?'checked':'')+'/><span class="switch-track"></span></label>' +
+      '</div>' +
+      '<div class="divider-label" style="margin-top:0;">Datos personales</div>' +
+      '<div class="field"><label for="f-nombre">Nombre completo</label><input id="f-nombre" value="'+esc(existing?existing.nombre:'')+'" /></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="f-dpi">DPI (CUI)</label><input id="f-dpi" inputmode="numeric" maxlength="13" placeholder="13 dígitos" value="'+esc(existing?existing.dpi:'')+'" /></div>' +
+        '<div class="field"><label for="f-nacimiento">Fecha de nacimiento</label><input id="f-nacimiento" type="date" value="'+esc(existing?existing.fechaNacimiento||'':'')+'" /></div>' +
+      '</div>' +
+      '<div class="field"><label for="f-direccion">Dirección</label><textarea id="f-direccion" placeholder="Dirección donde vive">'+esc(existing?existing.direccion:'')+'</textarea></div>' +
+      '<div class="field"><label for="f-telefono">Teléfono</label><input id="f-telefono" type="tel" placeholder="Ej. 5555 5555" value="'+esc(existing?existing.telefono:'')+'" /></div>' +
+
+      '<div class="divider-label">Contacto de emergencia</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="f-emerg-nombre">Nombre</label><input id="f-emerg-nombre" value="'+esc(existing?existing.emergenciaNombre:'')+'" /></div>' +
+        '<div class="field"><label for="f-emerg-telefono">Teléfono</label><input id="f-emerg-telefono" type="tel" value="'+esc(existing?existing.emergenciaTelefono:'')+'" /></div>' +
+      '</div>' +
+
+      '<div class="divider-label">Datos laborales</div>' +
+      '<div class="field"><label for="f-puesto">Puesto</label><input id="f-puesto" value="'+esc(existing?existing.puesto:'')+'" placeholder="Ej. Vendedor(a)" /></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="f-salario">Salario base mensual (Q)</label><input id="f-salario" type="number" min="0" step="0.01" value="'+(existing?existing.salarioBase:'')+'" /></div>' +
+        '<div class="field"><label for="f-bono">Bonificación incentivo (Q)</label><input id="f-bono" type="number" min="0" step="0.01" value="'+(existing? (existing.bonificacion!=null?existing.bonificacion:DEFAULT_BONIFICACION) : DEFAULT_BONIFICACION)+'" /></div>' +
+      '</div>' +
+      '<div class="field"><label for="f-q1">Monto que recibe en la primera quincena (Q)</label><input id="f-q1" type="number" min="0" step="0.01" value="'+(existing && existing.salarioQuincena1!=null ? existing.salarioQuincena1 : '')+'" /><p class="hint" id="f-q2-hint">Segunda quincena: —</p></div>' +
+      '<div class="field"><label for="f-cuenta">Cuenta bancaria (opcional)</label><input id="f-cuenta" value="'+esc(existing?existing.cuentaBancaria:'')+'" /></div>' +
+      '<div class="field"><label for="f-ingreso">Fecha de ingreso</label><input id="f-ingreso" type="date" value="'+(existing?existing.fechaIngreso||'':todayISO())+'" /></div>' +
+      '<button class="btn btn-primary btn-block" id="f-submit">'+(isEdit?'Guardar cambios':'Agregar empleado')+'</button>';
+
+    openSheet(isEdit?'Editar empleado':'Nuevo empleado', body, function(root){
+      root.querySelector('#f-igss-toggle').addEventListener('change', function(e){
+        root.querySelector('#f-igss-hint').textContent = e.target.checked ? 'Activado: se descuenta en cada pago.' : 'Desactivado: no se descuenta.';
+      });
+      root.querySelector('#f-isr-toggle').addEventListener('change', function(e){
+        root.querySelector('#f-isr-hint').textContent = e.target.checked ? 'Activado: se descuenta en cada pago.' : 'Desactivado: no se descuenta.';
+      });
+
+      var salarioInput = root.querySelector('#f-salario');
+      var q1Input = root.querySelector('#f-q1');
+      var q2Hint = root.querySelector('#f-q2-hint');
+      var q1Touched = isEdit && existing.salarioQuincena1 != null;
+      function updateQ2(){
+        var total = Number(salarioInput.value)||0;
+        var q1 = Number(q1Input.value)||0;
+        q2Hint.textContent = 'Segunda quincena: ' + fmtQ(Math.max(0, round2(total - q1)));
+      }
+      salarioInput.addEventListener('input', function(){
+        if(!q1Touched){ q1Input.value = round2((Number(salarioInput.value)||0)/2) || ''; }
+        updateQ2();
+      });
+      q1Input.addEventListener('input', function(){ q1Touched = true; updateQ2(); });
+      updateQ2();
+
+      root.querySelector('#f-submit').addEventListener('click', async function(){
+        var data = {
+          nombre: root.querySelector('#f-nombre').value.trim(),
+          dpi: root.querySelector('#f-dpi').value.trim(),
+          fechaNacimiento: root.querySelector('#f-nacimiento').value,
+          direccion: root.querySelector('#f-direccion').value.trim(),
+          telefono: root.querySelector('#f-telefono').value.trim(),
+          emergenciaNombre: root.querySelector('#f-emerg-nombre').value.trim(),
+          emergenciaTelefono: root.querySelector('#f-emerg-telefono').value.trim(),
+          puesto: root.querySelector('#f-puesto').value.trim(),
+          salarioBase: round2(root.querySelector('#f-salario').value),
+          bonificacion: round2(root.querySelector('#f-bono').value),
+          salarioQuincena1: round2(Math.min(Number(root.querySelector('#f-salario').value)||0, Math.max(0, Number(root.querySelector('#f-q1').value)||0))),
+          cuentaBancaria: root.querySelector('#f-cuenta').value.trim(),
+          fechaIngreso: root.querySelector('#f-ingreso').value,
+          igssActivo: root.querySelector('#f-igss-toggle').checked,
+          isrActivo: root.querySelector('#f-isr-toggle').checked
+        };
+        if(!data.nombre){ toast('El nombre es obligatorio', true); return; }
+        if(!/^\d{13}$/.test(data.dpi)){ toast('El DPI debe tener 13 dígitos', true); return; }
+        if(!data.fechaNacimiento){ toast('Ingresa la fecha de nacimiento', true); return; }
+        if(!data.direccion){ toast('La dirección es obligatoria', true); return; }
+        if(!data.telefono){ toast('El teléfono es obligatorio', true); return; }
+        if(!data.emergenciaNombre || !data.emergenciaTelefono){ toast('Completa el contacto de emergencia', true); return; }
+        try{
+          if(isEdit){ await state.db.collection('empleados').doc(existing.id).update(data); toast('Empleado actualizado'); }
+          else{ data.activo = true; data.empresaId = state.empresaActualId; data.creadoEn = new Date().toISOString(); data.creadoPor = state.session.nombre; await state.db.collection('empleados').add(data); toast('Empleado agregado'); }
+          closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openEmpleadoDetail(emp){
+    var historial = state.pagos.filter(function(p){ return p.empleadoId === emp.id; }).slice(0,10);
+    var prestamosEmp = state.prestamos.filter(function(l){ return l.empleadoId === emp.id; })
+      .sort(function(a,b){ return (b.creadoEn||'').localeCompare(a.creadoEn||''); });
+    var comisionesEmp = state.comisiones.filter(function(c){ return c.empleadoId === emp.id; })
+      .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
+    var body =
+      (igssOn && isrOn? '' : '<div class="banner">'+(!igssOn&&!isrOn?'IGSS e ISR están desactivados':(!igssOn?'IGSS está desactivado':'ISR está desactivado'))+' para este empleado.</div>') +
+      '<div class="divider-label" style="margin-top:0;">Datos personales</div>' +
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>DPI</span><span class="amt">'+esc(emp.dpi||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha de nacimiento</span><span>'+esc(emp.fechaNacimiento||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Dirección</span><span>'+esc(emp.direccion||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Teléfono</span><span>'+esc(emp.telefono||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Contacto de emergencia</span><span>'+esc(emp.emergenciaNombre||'—')+(emp.emergenciaTelefono?' · '+esc(emp.emergenciaTelefono):'')+'</span></div>' +
+      '</div>' +
+      '<div class="divider-label">Datos laborales</div>' +
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Puesto</span><span>'+esc(emp.puesto||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Salario base (mensual)</span><span class="amt">'+fmtQ(emp.salarioBase)+'</span></div>' +
+        '<div class="breakdown-row"><span>Primera quincena</span><span class="amt">'+fmtQ(emp.salarioQuincena1!=null?emp.salarioQuincena1:emp.salarioBase/2)+'</span></div>' +
+        '<div class="breakdown-row"><span>Segunda quincena</span><span class="amt">'+fmtQ(emp.salarioBase - (emp.salarioQuincena1!=null?emp.salarioQuincena1:emp.salarioBase/2))+'</span></div>' +
+        '<div class="breakdown-row"><span>Bonificación incentivo</span><span class="amt">'+fmtQ(emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION)+'</span></div>' +
+        '<div class="breakdown-row"><span>Cuenta bancaria</span><span>'+esc(emp.cuentaBancaria||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Ingreso</span><span>'+esc(emp.fechaIngreso||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Antigüedad</span><span>'+fmtAntiguedad(emp.fechaIngreso)+'</span></div>' +
+        '<div class="breakdown-row"><span>IGSS</span><span>'+(igssOn?'Activado':'Desactivado')+'</span></div>' +
+        '<div class="breakdown-row"><span>ISR</span><span>'+(isrOn?'Activado':'Desactivado')+'</span></div>' +
+      '</div>' +
+      '<div class="section-title" style="margin-top:12px;"><h2>Préstamos y descuentos</h2><button class="link-btn" id="add-prestamo">+ Nuevo</button></div>' +
+      '<div id="prestamos-wrap">'+(prestamosEmp.length? '<div class="ledger">'+prestamosEmp.map(prestamoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin préstamos ni descuentos registrados</div>')+'</div>' +
+      '<div class="section-title"><h2>Comisiones</h2><button class="link-btn" id="add-comision">+ Nueva</button></div>' +
+      '<div id="comisiones-emp-wrap">'+(comisionesEmp.length? '<div class="ledger">'+comisionesEmp.map(comisionRowHtml).join('')+'</div>' : '<div class="empty-state">Sin comisiones registradas</div>')+'</div>' +
+      '<div class="divider-label">Historial de pagos</div>' +
+      '<div id="hist-wrap">'+(historial.length? '<div class="ledger">'+historial.map(pagoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin pagos registrados</div>')+'</div>' +
+      '<div class="section-title" style="margin-top:20px;">' +
+        '<button class="btn btn-secondary" id="edit-emp">Editar</button>' +
+        '<button class="btn '+(emp.activo===false?'btn-secondary':'btn-danger')+'" id="toggle-emp">'+(emp.activo===false?'Reactivar':'Archivar')+'</button>' +
+      '</div>' +
+      '<button class="btn btn-danger btn-block" id="delete-emp" style="margin-top:8px;">Eliminar empleado</button>' +
+      '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
+    openSheet(esc(emp.nombre), body, function(root){
+      if(historial.length){ wireLedgerRows(root.querySelector('#hist-wrap'), historial, function(p){ closeSheet(); setTimeout(function(){ openPagoDetail(p); }, 230); }); }
+      if(prestamosEmp.length){ wireLedgerRows(root.querySelector('#prestamos-wrap'), prestamosEmp, function(l){ closeSheet(); setTimeout(function(){ openPrestamoDetail(l); }, 230); }); }
+      root.querySelector('#add-prestamo').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openPrestamoForm(emp); }, 230); });
+      if(comisionesEmp.length){ wireLedgerRows(root.querySelector('#comisiones-emp-wrap'), comisionesEmp, function(c){ closeSheet(); setTimeout(function(){ openComisionDetail(c); }, 230); }); }
+      root.querySelector('#add-comision').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openComisionForm(emp); }, 230); });
+      root.querySelector('#edit-emp').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openEmpleadoForm(emp); }, 230); });
+      root.querySelector('#toggle-emp').addEventListener('click', async function(){
+        try{ await state.db.collection('empleados').doc(emp.id).update({activo: emp.activo===false}); toast(emp.activo===false?'Empleado reactivado':'Empleado archivado'); closeSheet(); }
+        catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+      });
+      root.querySelector('#delete-emp').addEventListener('click', async function(){
+        if(!confirm('¿Eliminar definitivamente a '+emp.nombre+'? Esta acción no se puede deshacer.')) return;
+        try{ await state.db.collection('empleados').doc(emp.id).delete(); toast('Empleado eliminado'); closeSheet(); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  /* ---------- Préstamos y descuentos ---------- */
+  function prestamoRowHtml(l){
+    var pillClass = l.estado==='completado' ? 'pagado' : (l.estado==='cancelado' ? 'inactivo' : 'pendiente');
+    var pillLabel = l.estado==='completado' ? 'Completado' : (l.estado==='cancelado' ? 'Cancelado' : 'Activo');
+    var barClass = l.estado==='completado' ? 'good' : (l.estado==='activo' ? 'warning' : '');
+    return '<button class="ledger-row" data-id="'+l.id+'">' +
+      '<span class="status-bar '+barClass+'"></span>' +
+      '<span class="row-main"><span class="title">'+esc(l.concepto)+'</span><span class="sub">'+(l.frecuencia==='mensual'?'Cada mes':'Cada 15 días')+' · '+(l.cuotasAplicadas||0)+'/'+l.numCuotas+' cuotas</span></span>' +
+      '<span class="row-amount"><span class="amt">'+fmtQ(l.saldoPendiente)+'</span><span class="pill '+pillClass+'">'+pillLabel+'</span></span>' +
+    '</button>';
+  }
+
+  function openPrestamoForm(emp){
+    var body =
+      '<div class="field"><label for="pr-concepto">Concepto</label><input id="pr-concepto" placeholder="Ej. Préstamo personal, daño de herramienta"/></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="pr-monto">Monto total (Q)</label><input id="pr-monto" type="number" min="0.01" step="0.01"/></div>' +
+        '<div class="field"><label for="pr-cuotas">Número de cuotas</label><input id="pr-cuotas" type="number" min="1" step="1" value="1"/></div>' +
+      '</div>' +
+      '<div class="field"><label>¿Cada cuánto se descuenta?</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="quincenal" checked/><span>Cada 15 días</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="mensual"/><span>Cada mes</span></label>' +
+      '</div></div>' +
+      '<p class="hint" id="pr-preview">—</p>' +
+      '<button class="btn btn-primary btn-block" id="pr-submit" style="margin-top:6px;">Registrar</button>';
+    openSheet('Nuevo préstamo o descuento', body, function(root){
+      function preview(){
+        var monto = Number(root.querySelector('#pr-monto').value)||0;
+        var cuotas = Math.max(1, parseInt(root.querySelector('#pr-cuotas').value,10)||1);
+        root.querySelector('#pr-preview').textContent = cuotas+' cuota(s) de '+fmtQ(round2(monto/cuotas))+' cada una, aplicadas automáticamente a los próximos pagos.';
+      }
+      root.querySelector('#pr-monto').addEventListener('input', preview);
+      root.querySelector('#pr-cuotas').addEventListener('input', preview);
+      preview();
+      root.querySelector('#pr-submit').addEventListener('click', async function(){
+        var concepto = root.querySelector('#pr-concepto').value.trim();
+        var monto = round2(root.querySelector('#pr-monto').value);
+        var cuotas = Math.max(1, parseInt(root.querySelector('#pr-cuotas').value,10)||1);
+        var frecuencia = root.querySelector('input[name=pr-frecuencia]:checked').value;
+        if(!concepto){ toast('Escribe el concepto', true); return; }
+        if(!monto || monto <= 0){ toast('El monto debe ser mayor a 0', true); return; }
+        try{
+          await state.db.collection('prestamos').add({
+            empleadoId: emp.id, empleadoNombre: emp.nombre, concepto: concepto, empresaId: state.empresaActualId,
+            montoTotal: monto, numCuotas: cuotas, montoCuota: round2(monto/cuotas),
+            frecuencia: frecuencia, saldoPendiente: monto, cuotasAplicadas: 0, estado: 'activo',
+            creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          });
+          toast('Préstamo/descuento registrado'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openPrestamoDetail(l){
+    var body =
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Monto total</span><span class="amt">'+fmtQ(l.montoTotal)+'</span></div>' +
+        '<div class="breakdown-row"><span>Cuota</span><span class="amt">'+fmtQ(l.montoCuota)+' · '+(l.frecuencia==='mensual'?'cada mes':'cada 15 días')+'</span></div>' +
+        '<div class="breakdown-row"><span>Cuotas aplicadas</span><span>'+(l.cuotasAplicadas||0)+' / '+l.numCuotas+'</span></div>' +
+        '<div class="breakdown-row total"><span>Saldo pendiente</span><span class="amt">'+fmtQ(l.saldoPendiente)+'</span></div>' +
+      '</div>' +
+      (l.estado === 'activo' ? '<button class="btn btn-danger btn-block" id="cancelar-prestamo">Cancelar préstamo/descuento</button>' : '');
+    openSheet(esc(l.concepto), body, function(root){
+      var btn = root.querySelector('#cancelar-prestamo');
+      if(btn) btn.addEventListener('click', async function(){
+        if(!confirm('¿Cancelar? Ya no se aplicará a los próximos pagos.')) return;
+        try{ await state.db.collection('prestamos').doc(l.id).update({estado:'cancelado'}); toast('Cancelado'); closeSheet(); }
+        catch(e){ toast('No se pudo cancelar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  /* ============================ NOMINA (PAGOS) ============================ */
+  function renderNomina(){
+    var el = document.getElementById('view-nomina');
+    var q = state.filters.pagosQuery.toLowerCase();
+    var list = state.pagos.filter(function(p){
+      if(p.empresaId !== state.empresaActualId) return false;
+      if(state.filters.pagosEstado !== 'todos' && p.estado !== state.filters.pagosEstado) return false;
+      return !q || (p.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
+    });
+
+    el.innerHTML =
+      '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId;}).length+' pagos registrados</p></div>' +
+      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="pago-search" placeholder="Buscar por empleado" value="'+esc(state.filters.pagosQuery)+'"/></div>' +
+      '<div class="filter-chips">' +
+        chip('todos','Todos') + chip('pagado','Pagados') + chip('pendiente','Pendientes') +
+      '</div>' +
+      '<div id="pagos-wrap"></div>';
+
+    function chip(val,label){ return '<button class="chip'+(state.filters.pagosEstado===val?' active':'')+'" data-val="'+val+'">'+label+'</button>'; }
+
+    document.getElementById('pago-search').addEventListener('input', function(e){ state.filters.pagosQuery = e.target.value; renderNomina(); });
+    el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
+
+    var wrap = document.getElementById('pagos-wrap');
+    if(list.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin pagos</div>Usa el botón + para registrar uno.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + list.map(pagoRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, list, openPagoDetail);
+    }
+  }
+
+  function pagoRowHtml(p){
+    var pagado = p.estado !== 'pendiente';
+    return '<button class="ledger-row" data-id="'+p.id+'">' +
+      '<span class="status-bar '+(pagado?'good':'warning')+'"></span>' +
+      '<span class="row-main"><span class="title">'+esc(p.empleadoNombre)+'</span><span class="sub">'+esc(p.periodoEtiqueta)+'</span></span>' +
+      '<span class="row-amount"><span class="amt">'+fmtQ(p.totalNeto)+'</span><span class="pill '+(pagado?'pagado':'pendiente')+'">'+(pagado?'Pagado':'Pendiente')+'</span></span>' +
+      '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+    '</button>';
+  }
+
+  function openPagoForm(){
+    var activos = ordenarPorIngreso(state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; }));
+    if(activos.length === 0){ toast('Agrega primero un empleado', true); return; }
+    var body =
+      '<div class="field"><label for="p-empleado">Empleado</label><select id="p-empleado">' +
+        activos.map(function(e){ return '<option value="'+e.id+'">'+esc(e.nombre)+' — '+fmtQ(e.salarioBase)+'/mes</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>Periodo</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="p-periodo" value="quincena1" checked/><span>Quincena 1</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="p-periodo" value="quincena2"/><span>Quincena 2</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="p-periodo" value="mensual"/><span>Mensual</span></label>' +
+      '</div></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="p-fecha">Fecha de pago</label><input id="p-fecha" type="date" value="'+todayISO()+'"/></div>' +
+        '<div class="field"><label>Estado</label><div class="radio-group">' +
+          '<label class="radio-chip"><input type="radio" name="p-estado" value="pagado" checked/><span>Pagado</span></label>' +
+          '<label class="radio-chip"><input type="radio" name="p-estado" value="pendiente"/><span>Pendiente</span></label>' +
+        '</div></div>' +
+      '</div>' +
+      '<div class="field"><label for="p-otras">Deducción puntual (Q, opcional)</label><input id="p-otras" type="number" min="0" step="0.01" value="0"/></div>' +
+      '<div class="field"><label for="p-nota">Nota de la deducción puntual (opcional)</label><input id="p-nota" placeholder="Ej. daño de equipo"/></div>' +
+      '<div id="p-loans"></div>' +
+      '<div class="divider-label">Desglose estimado</div>' +
+      '<div class="breakdown" id="p-breakdown"></div>' +
+      '<p class="disclaimer">Cálculo de IGSS ('+fmtPct(getIgssRate())+') e ISR según los parámetros configurados (por defecto, la tabla de rentas de trabajo en relación de dependencia vigente en Guatemala). Ajústalos en Equipo → Parámetros de IGSS/ISR si cambia la ley. Verifica cifras oficiales con tu contador antes de pagar.</p>' +
+      '<button class="btn btn-primary btn-block" id="p-submit" style="margin-top:14px;">Guardar pago</button>';
+
+    openSheet('Registrar pago', body, function(root){
+      function loansForCurrentEmp(){
+        var empId = root.querySelector('#p-empleado').value;
+        return state.prestamos.filter(function(l){ return l.empleadoId === empId && l.estado === 'activo'; });
+      }
+      function renderLoans(){
+        var periodo = root.querySelector('input[name=p-periodo]:checked').value;
+        var loans = loansForCurrentEmp();
+        var wrap = root.querySelector('#p-loans');
+        if(loans.length === 0){ wrap.innerHTML = ''; return; }
+        wrap.innerHTML = '<div class="divider-label">Préstamos y descuentos activos</div><div class="ledger" style="padding:2px 12px;">' +
+          loans.map(function(l){
+            var cuota = round2(Math.min(l.montoCuota, l.saldoPendiente));
+            var defChecked = (periodo === 'mensual') === (l.frecuencia === 'mensual');
+            return '<label class="loan-check"><input type="checkbox" class="loan-cb" data-loan="'+l.id+'" data-cuota="'+cuota+'" data-concepto="'+esc(l.concepto)+'" '+(defChecked?'checked':'')+'/>' +
+              '<span class="lc-text"><span class="t1">'+esc(l.concepto)+'</span><span class="t2">'+(l.frecuencia==='mensual'?'Cada mes':'Cada 15 días')+' · saldo '+fmtQ(l.saldoPendiente)+'</span></span>' +
+              '<span class="lc-amt">-'+fmtQ(cuota)+'</span></label>';
+          }).join('') + '</div>';
+        wrap.querySelectorAll('.loan-cb').forEach(function(cb){ cb.addEventListener('change', recalc); });
+      }
+      function checkedLoans(){
+        var out = [];
+        root.querySelectorAll('.loan-cb:checked').forEach(function(cb){
+          out.push({ prestamoId: cb.dataset.loan, concepto: cb.dataset.concepto, monto: Number(cb.dataset.cuota)||0 });
+        });
+        return out;
+      }
+      function recalc(){
+        var empId = root.querySelector('#p-empleado').value;
+        var emp = activos.find(function(e){ return e.id === empId; });
+        var periodo = root.querySelector('input[name=p-periodo]:checked').value;
+        var fecha = root.querySelector('#p-fecha').value;
+        var manualOtras = Number(root.querySelector('#p-otras').value)||0;
+        var loanSum = checkedLoans().reduce(function(s,l){ return s + l.monto; }, 0);
+        var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
+        var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        root.querySelector('#p-breakdown').innerHTML =
+          (diasInfo ? '<div class="banner" style="margin-bottom:10px;">Empleado nuevo: se le pagan '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de este periodo (ingresó el '+esc(emp.fechaIngreso)+').</div>' : '') +
+          row('Salario base', b.salarioBase) + row('Bonificación incentivo', b.bonificacion) +
+          row('Salario bruto', b.salarioBruto) +
+          (igssOn? row('IGSS ('+fmtPct(getIgssRate())+')', -b.igss) : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
+          (isrOn? row('ISR estimado', -b.isr) : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
+          (manualOtras? row('Deducción puntual', -manualOtras) : '') +
+          (loanSum? row('Préstamos/descuentos', -loanSum) : '') +
+          '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>';
+      }
+      function row(label, val){ return '<div class="breakdown-row"><span>'+label+'</span><span class="amt">'+fmtQ(val)+'</span></div>'; }
+      root.querySelector('#p-empleado').addEventListener('change', function(){ renderLoans(); recalc(); });
+      root.querySelectorAll('input[name=p-periodo]').forEach(function(r){ r.addEventListener('change', function(){ renderLoans(); recalc(); }); });
+      root.querySelector('#p-fecha').addEventListener('change', recalc);
+      root.querySelector('#p-otras').addEventListener('input', recalc);
+      renderLoans(); recalc();
+
+      root.querySelector('#p-submit').addEventListener('click', async function(){
+        var empId = root.querySelector('#p-empleado').value;
+        var emp = activos.find(function(e){ return e.id === empId; });
+        var periodo = root.querySelector('input[name=p-periodo]:checked').value;
+        var estado = root.querySelector('input[name=p-estado]:checked').value;
+        var fecha = root.querySelector('#p-fecha').value;
+        var manualOtras = Number(root.querySelector('#p-otras').value)||0;
+        var nota = root.querySelector('#p-nota').value.trim();
+        var loanApplied = checkedLoans();
+        var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
+        var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
+        var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var data = Object.assign({
+          empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+          periodoTipo: periodo, periodoEtiqueta: periodoEtiqueta(fecha, periodo),
+          fechaPago: fecha, estado: estado,
+          otrasDeduccionesManual: round2(manualOtras), otrasDeduccionesNota: nota,
+          prestamosAplicados: loanApplied, diasTrabajados: diasInfo,
+          registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+        }, b);
+        try{
+          await state.db.collection('pagos').add(data);
+          for(var i=0;i<loanApplied.length;i++){
+            var la = loanApplied[i];
+            var loan = state.prestamos.find(function(l){ return l.id === la.prestamoId; });
+            if(!loan) continue;
+            var nuevoSaldo = round2(Math.max(0, loan.saldoPendiente - la.monto));
+            await state.db.collection('prestamos').doc(loan.id).update({
+              saldoPendiente: nuevoSaldo,
+              cuotasAplicadas: (loan.cuotasAplicadas||0) + 1,
+              estado: nuevoSaldo <= 0.01 ? 'completado' : 'activo'
+            });
+          }
+          toast('Pago registrado'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openPagoDetail(p){
+    var body =
+      (p.diasTrabajados ? '<div class="banner">Empleado nuevo: se le pagaron '+p.diasTrabajados.diasTrabajados+' de '+p.diasTrabajados.diasPeriodo+' días de este periodo.</div>' : '') +
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Periodo</span><span>'+esc(p.periodoEtiqueta)+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha</span><span>'+esc(p.fechaPago)+'</span></div>' +
+        '<div class="breakdown-row"><span>Salario base</span><span class="amt">'+fmtQ(p.salarioBase)+'</span></div>' +
+        '<div class="breakdown-row"><span>Bonificación</span><span class="amt">'+fmtQ(p.bonificacion)+'</span></div>' +
+        '<div class="breakdown-row"><span>IGSS</span><span class="amt">'+(p.igss?('-'+fmtQ(p.igss)):'No aplica')+'</span></div>' +
+        '<div class="breakdown-row"><span>ISR</span><span class="amt">'+(p.isr?('-'+fmtQ(p.isr)):'No aplica')+'</span></div>' +
+        (p.otrasDeduccionesManual? '<div class="breakdown-row"><span>Deducción puntual'+(p.otrasDeduccionesNota?' ('+esc(p.otrasDeduccionesNota)+')':'')+'</span><span class="amt">-'+fmtQ(p.otrasDeduccionesManual)+'</span></div>' : '') +
+        (p.prestamosAplicados||[]).map(function(pa){ return '<div class="breakdown-row"><span>'+esc(pa.concepto)+'</span><span class="amt">-'+fmtQ(pa.monto)+'</span></div>'; }).join('') +
+        '<div class="breakdown-row total"><span>Total neto</span><span class="amt">'+fmtQ(p.totalNeto)+'</span></div>' +
+      '</div>' +
+      (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '') +
+      '<div class="breakdown-row" style="padding:0 2px;margin-top:8px;"><span>Registrado por</span><span>'+esc(p.registradoPor||'—')+'</span></div>' +
+      (p.estado === 'pendiente' ? '<button class="btn btn-primary btn-block" id="marcar-pagado" style="margin-top:16px;">Marcar como pagado</button>' : '');
+    openSheet(esc(p.empleadoNombre), body, function(root){
+      var btn = root.querySelector('#marcar-pagado');
+      if(btn) btn.addEventListener('click', async function(){
+        try{ await state.db.collection('pagos').doc(p.id).update({estado:'pagado'}); toast('Marcado como pagado'); closeSheet(); }
+        catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  /* ============================ COMISIONES ============================ */
+  function renderComisiones(){
+    var el = document.getElementById('view-comisiones');
+    var q = (state.filters.comisionesQuery||'').toLowerCase();
+    var comisionesEmpresa = state.comisiones.filter(function(c){ return c.empresaId === state.empresaActualId; });
+    var list = comisionesEmpresa.filter(function(c){
+      return !q || (c.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
+    });
+    var ym = todayISO().slice(0,7);
+    var totalMes = comisionesEmpresa.filter(function(c){ return (c.fecha||'').slice(0,7) === ym; })
+      .reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
+
+    el.innerHTML =
+      '<div class="view-head"><h1>Comisiones</h1><p>Pagos aparte del salario</p></div>' +
+      '<div class="banner">Las comisiones son pagos independientes: no afectan el salario, ni se incluyen en el cálculo de IGSS, ISR o la proyección de nómina.</div>' +
+      '<div class="stat-row" style="grid-template-columns:1fr 1fr;">' +
+        '<div class="stat-tile"><div class="label">Comisiones (mes)</div><div class="value money">'+totalMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Registros (mes)</div><div class="value">'+comisionesEmpresa.filter(function(c){return (c.fecha||'').slice(0,7)===ym;}).length+'</div></div>' +
+      '</div>' +
+      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="com-search" placeholder="Buscar por empleado" value="'+esc(state.filters.comisionesQuery||'')+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="qa-nueva-comision" style="margin-bottom:14px;">+ Registrar comisión</button>' +
+      '<div id="comisiones-wrap"></div>';
+
+    document.getElementById('com-search').addEventListener('input', function(e){ state.filters.comisionesQuery = e.target.value; renderComisiones(); });
+    document.getElementById('qa-nueva-comision').addEventListener('click', function(){ openComisionForm(null); });
+
+    var wrap = document.getElementById('comisiones-wrap');
+    if(list.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin comisiones registradas</div>Usa el botón de arriba para agregar una.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + list.map(comisionRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, list, openComisionDetail);
+    }
+  }
+
+  function comisionRowHtml(c){
+    return '<button class="ledger-row" data-id="'+c.id+'">' +
+      '<span class="status-bar good"></span>' +
+      '<span class="row-main"><span class="title">'+esc(c.empleadoNombre)+'</span><span class="sub">'+esc(c.concepto || c.fecha)+'</span></span>' +
+      '<span class="row-amount"><span class="amt">'+fmtQ(c.monto)+'</span></span>' +
+      '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+    '</button>';
+  }
+
+  function openComisionForm(preseleccionado){
+    var activos = ordenarPorIngreso(state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; }));
+    if(activos.length === 0){ toast('Agrega primero un empleado', true); return; }
+    var body =
+      '<div class="field"><label for="c-empleado">Empleado</label><select id="c-empleado">' +
+        activos.map(function(e){ return '<option value="'+e.id+'" '+(preseleccionado && preseleccionado.id===e.id?'selected':'')+'>'+esc(e.nombre)+'</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label for="c-monto">Monto de la comisión (Q)</label><input id="c-monto" type="number" min="0.01" step="0.01"/></div>' +
+      '<div class="field"><label for="c-concepto">Concepto (opcional)</label><input id="c-concepto" placeholder="Ej. Venta de septiembre"/></div>' +
+      '<div class="field"><label for="c-fecha">Fecha</label><input id="c-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      '<p class="disclaimer">Este pago es independiente del salario: no se suma a la nómina ni afecta el cálculo de IGSS o ISR.</p>' +
+      '<button class="btn btn-primary btn-block" id="c-submit" style="margin-top:6px;">Registrar comisión</button>';
+    openSheet('Registrar comisión', body, function(root){
+      root.querySelector('#c-submit').addEventListener('click', async function(){
+        var empId = root.querySelector('#c-empleado').value;
+        var emp = activos.find(function(e){ return e.id === empId; });
+        var monto = round2(root.querySelector('#c-monto').value);
+        var concepto = root.querySelector('#c-concepto').value.trim();
+        var fecha = root.querySelector('#c-fecha').value;
+        if(!monto || monto <= 0){ toast('El monto debe ser mayor a 0', true); return; }
+        try{
+          await state.db.collection('comisiones').add({
+            empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+            monto: monto, concepto: concepto, fecha: fecha,
+            registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          });
+          toast('Comisión registrada'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openComisionDetail(c){
+    var body =
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Empleado</span><span>'+esc(c.empleadoNombre)+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha</span><span>'+esc(c.fecha)+'</span></div>' +
+        (c.concepto ? '<div class="breakdown-row"><span>Concepto</span><span>'+esc(c.concepto)+'</span></div>' : '') +
+        '<div class="breakdown-row total"><span>Monto</span><span class="amt">'+fmtQ(c.monto)+'</span></div>' +
+      '</div>' +
+      '<div class="breakdown-row" style="padding:0 2px;margin-bottom:16px;"><span>Registrado por</span><span>'+esc(c.registradoPor||'—')+'</span></div>' +
+      '<button class="btn btn-danger btn-block" id="delete-comision">Eliminar</button>';
+    openSheet(esc(c.empleadoNombre), body, function(root){
+      root.querySelector('#delete-comision').addEventListener('click', async function(){
+        if(!confirm('¿Eliminar esta comisión de '+c.empleadoNombre+'?')) return;
+        try{ await state.db.collection('comisiones').doc(c.id).delete(); toast('Comisión eliminada'); closeSheet(); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  /* ============================ PAGAR SUELDOS ============================ */
+  function openPagarSueldos(){
+    var ctx = { periodo: 'quincena1', fecha: todayISO(), cleanupSig: null };
+
+    openSheet('Pagar sueldos', '<div id="ps-content"></div>', function(root){
+      var content = root.querySelector('#ps-content');
+
+      function computeFor(emp){
+        var etiqueta = periodoEtiqueta(ctx.fecha, ctx.periodo);
+        var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+        var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
+        var loanApplied = loans.filter(function(l){ return (ctx.periodo === 'mensual') === (l.frecuencia === 'mensual'); })
+          .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(l.montoCuota, l.saldoPendiente)) }; });
+        var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
+        var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
+        var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, ctx.fecha, ctx.periodo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        return { etiqueta: etiqueta, pagoExistente: pagoExistente, loanApplied: loanApplied, igssOn: igssOn, isrOn: isrOn, b: b, diasInfo: diasInfo };
+      }
+
+      function renderList(){
+        if(ctx.cleanupSig){ ctx.cleanupSig(); ctx.cleanupSig = null; activeSheetCleanup = null; }
+        var activos = ordenarPorIngreso(state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; }));
+        var pagados = 0;
+        var rows = activos.map(function(e){
+          var info = computeFor(e);
+          var pagado = !!info.pagoExistente;
+          if(pagado) pagados++;
+          var monto = pagado ? info.pagoExistente.totalNeto : info.b.totalNeto;
+          var subLabel = esc(e.puesto||'') + (info.diasInfo ? ' · '+info.diasInfo.diasTrabajados+'/'+info.diasInfo.diasPeriodo+' días' : '');
+          return '<div class="ledger-row pay-row">' +
+            '<span class="status-bar '+(pagado?'good':'warning')+'"></span>' +
+            '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+subLabel+'</span></span>' +
+            '<span class="row-amount"><span class="amt">'+fmtQ(monto)+'</span></span>' +
+            (pagado
+              ? '<button class="btn btn-secondary row-action ver-firma-btn" data-emp="'+e.id+'">Ver firma</button>'
+              : '<button class="btn btn-primary row-action pagar-btn" data-emp="'+e.id+'">Pagar</button>') +
+          '</div>';
+        }).join('');
+
+        content.innerHTML =
+          '<div class="field"><label>Periodo</label><div class="radio-group">' +
+            '<label class="radio-chip"><input type="radio" name="ps-periodo" value="quincena1" '+(ctx.periodo==='quincena1'?'checked':'')+'/><span>Quincena 1</span></label>' +
+            '<label class="radio-chip"><input type="radio" name="ps-periodo" value="quincena2" '+(ctx.periodo==='quincena2'?'checked':'')+'/><span>Quincena 2</span></label>' +
+            '<label class="radio-chip"><input type="radio" name="ps-periodo" value="mensual" '+(ctx.periodo==='mensual'?'checked':'')+'/><span>Mensual</span></label>' +
+          '</div></div>' +
+          '<div class="field"><label for="ps-fecha">Fecha de pago</label><input id="ps-fecha" type="date" value="'+ctx.fecha+'"/></div>' +
+          (activos.length ? '<p class="pay-count">'+pagados+' de '+activos.length+' empleados pagados · '+esc(periodoEtiqueta(ctx.fecha, ctx.periodo))+'</p>' : '') +
+          (activos.length ? '<div class="ledger">'+rows+'</div>' : '<div class="empty-state"><div class="display">Sin empleados activos</div>Agrega empleados para poder pagarles.</div>');
+
+        content.querySelectorAll('input[name=ps-periodo]').forEach(function(r){ r.addEventListener('change', function(){ ctx.periodo = r.value; renderList(); }); });
+        var fechaInput = content.querySelector('#ps-fecha');
+        if(fechaInput) fechaInput.addEventListener('change', function(){ ctx.fecha = fechaInput.value || todayISO(); renderList(); });
+
+        content.querySelectorAll('.pagar-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
+            if(emp) renderSignature(emp);
+          });
+        });
+        content.querySelectorAll('.ver-firma-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
+            var info = emp && computeFor(emp);
+            if(info && info.pagoExistente){ closeSheet(); setTimeout(function(){ openPagoDetail(info.pagoExistente); }, 230); }
+          });
+        });
+      }
+
+      function renderSignature(emp){
+        var info = computeFor(emp);
+        var b = info.b;
+        content.innerHTML =
+          '<button class="btn btn-ghost" id="sig-volver" style="padding:4px 0;margin-bottom:8px;">‹ Volver a la lista</button>' +
+          '<div class="view-head" style="margin-bottom:10px;"><h1 style="font-size:1.2rem;">'+esc(emp.nombre)+'</h1><p>'+esc(info.etiqueta)+'</p></div>' +
+          (info.diasInfo ? '<div class="banner">Empleado nuevo: se le pagan '+info.diasInfo.diasTrabajados+' de '+info.diasInfo.diasPeriodo+' días de este periodo (ingresó el '+esc(emp.fechaIngreso)+').</div>' : '') +
+          '<div class="breakdown">' +
+            row('Salario base', b.salarioBase) + row('Bonificación incentivo', b.bonificacion) + row('Salario bruto', b.salarioBruto) +
+            (info.igssOn? row('IGSS ('+fmtPct(getIgssRate())+')', -b.igss) : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
+            (info.isrOn? row('ISR estimado', -b.isr) : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
+            info.loanApplied.map(function(l){ return row(l.concepto, -l.monto); }).join('') +
+            '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>' +
+          '</div>' +
+          '<div class="divider-label">Firma de recibido</div>' +
+          '<div class="signature-box"><canvas id="firma-canvas"></canvas></div>' +
+          '<div class="quick-actions" style="margin-top:10px;"><button class="btn btn-secondary btn-block" id="firma-borrar">Borrar firma</button></div>' +
+          '<p class="hint">Pide al empleado que firme aquí para confirmar que recibió su pago.</p>' +
+          '<button class="btn btn-primary btn-block" id="firma-confirmar" style="margin-top:14px;" disabled>Confirmar pago</button>';
+
+        function row(label, val){ return '<div class="breakdown-row"><span>'+label+'</span><span class="amt">'+fmtQ(val)+'</span></div>'; }
+
+        var canvas = content.querySelector('#firma-canvas');
+        var c2d = canvas.getContext('2d');
+        var confirmBtn = content.querySelector('#firma-confirmar');
+        var hasDrawn = false, drawing = false, lastX = 0, lastY = 0;
+
+        function sizeCanvas(){
+          var rect = canvas.getBoundingClientRect();
+          canvas.width = Math.max(280, Math.round(rect.width));
+          canvas.height = 170;
+          c2d.lineWidth = 2.4; c2d.lineCap = 'round'; c2d.lineJoin = 'round'; c2d.strokeStyle = '#000000';
+        }
+        sizeCanvas();
+
+        function pos(e){
+          var rect = canvas.getBoundingClientRect();
+          return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+        function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
+        function move(e){
+          if(!drawing) return;
+          e.preventDefault();
+          var p = pos(e);
+          c2d.beginPath(); c2d.moveTo(lastX, lastY); c2d.lineTo(p.x, p.y); c2d.stroke();
+          lastX = p.x; lastY = p.y;
+          if(!hasDrawn){ hasDrawn = true; confirmBtn.disabled = false; }
+        }
+        function stop(){ drawing = false; }
+        canvas.addEventListener('pointerdown', start);
+        canvas.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', stop);
+
+        ctx.cleanupSig = function(){
+          canvas.removeEventListener('pointerdown', start);
+          canvas.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', stop);
+        };
+        activeSheetCleanup = ctx.cleanupSig;
+
+        content.querySelector('#firma-borrar').addEventListener('click', function(){
+          c2d.clearRect(0, 0, canvas.width, canvas.height);
+          hasDrawn = false; confirmBtn.disabled = true;
+        });
+        content.querySelector('#sig-volver').addEventListener('click', function(){ renderList(); });
+
+        confirmBtn.addEventListener('click', async function(){
+          if(!hasDrawn) return;
+          confirmBtn.disabled = true; confirmBtn.textContent = 'Guardando…';
+          var firmaDataUrl = canvas.toDataURL('image/png');
+          var fresh = computeFor(emp);
+          var data = Object.assign({
+            empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+            periodoTipo: ctx.periodo, periodoEtiqueta: fresh.etiqueta,
+            fechaPago: ctx.fecha, estado: 'pagado',
+            otrasDeduccionesManual: 0, otrasDeduccionesNota: '',
+            prestamosAplicados: fresh.loanApplied, diasTrabajados: fresh.diasInfo,
+            firma: firmaDataUrl, firmadoEn: new Date().toISOString(),
+            registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          }, fresh.b);
+          try{
+            await state.db.collection('pagos').add(data);
+            for(var i=0;i<fresh.loanApplied.length;i++){
+              var la = fresh.loanApplied[i];
+              var loan = state.prestamos.find(function(l){ return l.id === la.prestamoId; });
+              if(!loan) continue;
+              var nuevoSaldo = round2(Math.max(0, loan.saldoPendiente - la.monto));
+              await state.db.collection('prestamos').doc(loan.id).update({
+                saldoPendiente: nuevoSaldo,
+                cuotasAplicadas: (loan.cuotasAplicadas||0) + 1,
+                estado: nuevoSaldo <= 0.01 ? 'completado' : 'activo'
+              });
+            }
+            toast('Pago confirmado');
+            renderList();
+          }catch(e){
+            toast('No se pudo guardar: '+(e.code||''), true);
+            confirmBtn.disabled = false; confirmBtn.textContent = 'Confirmar pago';
+          }
+        });
+      }
+
+      renderList();
+    });
+  }
+
+  /* ============================ EQUIPO ============================ */
+  function renderEquipo(){
+    var el = document.getElementById('view-equipo');
+    if(state.session.rol !== 'administrador'){
+      el.innerHTML = '<div class="view-head"><h1>Equipo</h1></div><div class="empty-state">Solo un Administrador puede gestionar el equipo.</div>';
+      return;
+    }
+    var list = state.equipo.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    var empresasList = state.empresas.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    el.innerHTML =
+      '<div class="view-head"><h1>Equipo</h1><p>Usuarios, empresas y roles dentro de la app</p></div>' +
+      '<div class="banner">La protección real de los datos la controla <strong>Firebase Authentication</strong>: solo las cuentas que crees en la consola de Firebase pueden entrar. Lo de aquí abajo organiza el trabajo del equipo y qué empresa ve cada quien, pero no es un candado de seguridad entre empresas.</div>' +
+      '<div class="section-title" style="margin-top:0;"><h2>Empresas</h2><button class="link-btn" id="add-empresa">+ Nueva</button></div>' +
+      '<div class="ledger" id="empresas-wrap"></div>' +
+      '<div class="section-title"><h2>Usuarios</h2></div>' +
+      '<div class="ledger" id="equipo-wrap"></div>' +
+      '<p class="disclaimer">Para agregar una persona nueva, créala en la consola de Firebase (Authentication → Users) y comparte el correo y contraseña con ella; al iniciar sesión por primera vez completará su nombre aquí.</p>' +
+      '<div class="divider-label">Parámetros de IGSS / ISR — '+esc(empresaActual().nombre||'—')+'</div>' +
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>IGSS</span><span class="amt">'+fmtPct(getIgssRate())+'</span></div>' +
+        '<div class="breakdown-row"><span>ISR — tasa hasta el tope</span><span class="amt">'+fmtPct(getIsrParams().tasa1)+'</span></div>' +
+        '<div class="breakdown-row"><span>ISR — tope de renta imponible</span><span class="amt">'+fmtQ(getIsrParams().tope1)+'/año</span></div>' +
+        '<div class="breakdown-row"><span>ISR — tasa sobre el excedente</span><span class="amt">'+fmtPct(getIsrParams().tasa2)+'</span></div>' +
+        '<div class="breakdown-row"><span>ISR — exención anual</span><span class="amt">'+fmtQ(getIsrParams().exencion)+'</span></div>' +
+      '</div>' +
+      '<button class="btn btn-secondary btn-block" id="editar-parametros-fiscales" '+(state.empresaActualId?'':'disabled')+'>Editar IGSS / ISR</button>';
+
+    document.getElementById('add-empresa').addEventListener('click', openEmpresaForm);
+    var pfBtn = el.querySelector('#editar-parametros-fiscales');
+    if(pfBtn) pfBtn.addEventListener('click', openParametrosFiscalesForm);
+
+    var empresasWrap = document.getElementById('empresas-wrap');
+    if(empresasList.length === 0){
+      empresasWrap.innerHTML = '<div class="empty-state">Sin empresas registradas</div>';
+    } else {
+      empresasWrap.innerHTML = empresasList.map(function(em){
+        var nUsuarios = state.equipo.filter(function(m){ return (m.empresasAcceso||[]).indexOf(em.id) > -1; }).length;
+        return '<button class="ledger-row" data-id="'+em.id+'">' +
+          '<span class="status-bar'+(em.id===state.empresaActualId?' good':'')+'"></span>' +
+          '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+nUsuarios+' usuario'+(nUsuarios===1?'':'s')+' con acceso</span></span>' +
+          '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+        '</button>';
+      }).join('');
+      wireLedgerRows(empresasWrap, empresasList, openEmpresaDetalle);
+    }
+
+    var wrap = document.getElementById('equipo-wrap');
+    if(list.length === 0){
+      wrap.innerHTML = '<div class="empty-state">Sin usuarios todavía</div>';
+    } else {
+      wrap.innerHTML = list.map(function(m){
+        var isMe = m.id === state.session.id;
+        return '<button class="ledger-row" data-id="'+m.id+'">' +
+          '<span class="avatar">'+esc(initials(m.nombre))+'</span>' +
+          '<span class="row-main"><span class="title">'+esc(m.nombre)+(isMe?' (tú)':'')+'</span><span class="sub">'+esc(m.email||'')+' · '+(m.activo===false?'Inactivo':'Activo')+'</span></span>' +
+          '<span class="role-pill'+(m.rol==='administrador'?'':' editor')+'">'+(m.rol==='administrador'?'Admin':'Editor')+'</span>' +
+        '</button>';
+      }).join('');
+      wireLedgerRows(wrap, list, openMiembroForm);
+    }
+  }
+
+  function openEmpresaForm(){
+    var body =
+      '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
+      '<p class="disclaimer">Se creará con sus propios empleados, pagos y comisiones, separados de las demás empresas. Después de crearla, dale acceso a los usuarios que la deban ver desde su ficha.</p>' +
+      '<button class="btn btn-primary btn-block" id="em-submit" style="margin-top:6px;">Crear empresa</button>';
+    openSheet('Nueva empresa', body, function(root){
+      root.querySelector('#em-submit').addEventListener('click', async function(){
+        var nombre = root.querySelector('#em-nombre').value.trim();
+        if(!nombre){ toast('Escribe el nombre de la empresa', true); return; }
+        try{
+          var ref = await state.db.collection('empresas').add({ nombre: nombre, creadaPor: state.session.nombre, creadaEn: new Date().toISOString() });
+          var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
+          var acc = (miembro && miembro.empresasAcceso) || [];
+          await state.db.collection('equipo').doc(state.session.id).update({ empresasAcceso: acc.concat([ref.id]) });
+          state.empresaActualId = ref.id;
+          toast('Empresa creada'); closeSheet();
+        }catch(e){ toast('No se pudo crear: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openEmpresaDetalle(empresa){
+    var miembros = state.equipo.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    var body =
+      '<div class="field"><label for="ed-nombre">Nombre</label><input id="ed-nombre" value="'+esc(empresa.nombre)+'"/></div>' +
+      '<div class="divider-label" style="margin-top:0;">Usuarios con acceso</div>' +
+      (miembros.length === 0 ? '<div class="empty-state">Sin usuarios en el equipo todavía</div>' :
+        miembros.map(function(m){
+          var tiene = (m.empresasAcceso||[]).indexOf(empresa.id) > -1;
+          return '<label class="loan-check"><input type="checkbox" class="acc-cb" data-id="'+m.id+'" '+(tiene?'checked':'')+'/>' +
+            '<span class="lc-text"><span class="t1">'+esc(m.nombre)+'</span><span class="t2">'+(m.rol==='administrador'?'Administrador':'Editor de nómina')+'</span></span>' +
+          '</label>';
+        }).join('')
+      ) +
+      '<button class="btn btn-primary btn-block" id="ed-submit" style="margin-top:14px;">Guardar cambios</button>';
+    openSheet(esc(empresa.nombre), body, function(root){
+      root.querySelector('#ed-submit').addEventListener('click', async function(){
+        var nombre = root.querySelector('#ed-nombre').value.trim();
+        if(!nombre){ toast('El nombre es obligatorio', true); return; }
+        try{
+          await state.db.collection('empresas').doc(empresa.id).update({ nombre: nombre });
+          var checks = root.querySelectorAll('.acc-cb');
+          for(var i=0;i<checks.length;i++){
+            var cb = checks[i];
+            var miembro = state.equipo.find(function(m){ return m.id === cb.dataset.id; });
+            if(!miembro) continue;
+            var acc = miembro.empresasAcceso || [];
+            var tiene = acc.indexOf(empresa.id) > -1;
+            if(cb.checked && !tiene){
+              await state.db.collection('equipo').doc(miembro.id).update({ empresasAcceso: acc.concat([empresa.id]) });
+            } else if(!cb.checked && tiene){
+              await state.db.collection('equipo').doc(miembro.id).update({ empresasAcceso: acc.filter(function(id){ return id !== empresa.id; }) });
+            }
+          }
+          toast('Empresa actualizada'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openMiembroForm(existing){
+    if(!existing) return;
+    var body =
+      '<div class="field"><label for="m-nombre">Nombre</label><input id="m-nombre" value="'+esc(existing.nombre)+'" /></div>' +
+      '<div class="field"><label>Correo</label><input value="'+esc(existing.email||'')+'" disabled/></div>' +
+      '<div class="field"><label>Rol</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="m-rol" value="editor" '+(existing.rol==='editor'?'checked':'')+'/><span>Editor de nómina</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="m-rol" value="administrador" '+(existing.rol==='administrador'?'checked':'')+'/><span>Administrador</span></label>' +
+      '</div></div>' +
+      '<button class="btn btn-primary btn-block" id="m-submit">Guardar cambios</button>' +
+      '<button class="btn btn-danger btn-block" id="m-toggle" style="margin-top:8px;">'+(existing.activo===false?'Reactivar':'Desactivar')+'</button>';
+    openSheet('Editar miembro', body, function(root){
+      root.querySelector('#m-submit').addEventListener('click', async function(){
+        var nombre = root.querySelector('#m-nombre').value.trim();
+        var rol = root.querySelector('input[name=m-rol]:checked').value;
+        if(!nombre){ toast('El nombre es obligatorio', true); return; }
+        try{ await state.db.collection('equipo').doc(existing.id).update({nombre:nombre, rol:rol}); toast('Miembro actualizado'); closeSheet(); }
+        catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+      root.querySelector('#m-toggle').addEventListener('click', async function(){
+        if(existing.id === state.session.id){ toast('No puedes desactivarte a ti mismo', true); return; }
+        try{ await state.db.collection('equipo').doc(existing.id).update({activo: existing.activo===false}); toast('Actualizado'); closeSheet(); }
+        catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openParametrosFiscalesForm(){
+    var igss = fmtPctNum(getIgssRate());
+    var isr = getIsrParams();
+    var body =
+      '<div class="field"><label for="pf-igss">IGSS — cuota laboral (%)</label><input id="pf-igss" type="number" min="0" step="0.01" value="'+igss+'"/></div>' +
+      '<div class="divider-label" style="margin-top:0;">ISR (rentas de trabajo en relación de dependencia)</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="pf-t1">Tasa hasta el tope (%)</label><input id="pf-t1" type="number" min="0" step="0.01" value="'+fmtPctNum(isr.tasa1)+'"/></div>' +
+        '<div class="field"><label for="pf-tope1">Tope de renta imponible (Q/año)</label><input id="pf-tope1" type="number" min="0" step="1" value="'+isr.tope1+'"/></div>' +
+      '</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="pf-t2">Tasa sobre el excedente (%)</label><input id="pf-t2" type="number" min="0" step="0.01" value="'+fmtPctNum(isr.tasa2)+'"/></div>' +
+        '<div class="field"><label for="pf-exen">Exención anual (Q)</label><input id="pf-exen" type="number" min="0" step="1" value="'+isr.exencion+'"/></div>' +
+      '</div>' +
+      '<p class="disclaimer">Estos valores se usan para calcular IGSS e ISR en todos los pagos de la app. Vienen precargados con lo que indica la ley de Guatemala vigente; ajústalos solo si hay un cambio oficial.</p>' +
+      '<button class="btn btn-primary btn-block" id="pf-submit" style="margin-top:6px;">Guardar</button>' +
+      '<button class="btn btn-ghost btn-block" id="pf-reset">Restablecer valores de ley</button>';
+    openSheet('IGSS / ISR', body, function(root){
+      root.querySelector('#pf-reset').addEventListener('click', function(){
+        root.querySelector('#pf-igss').value = fmtPctNum(IGSS_RATE_DEFAULT);
+        root.querySelector('#pf-t1').value = fmtPctNum(ISR_TASA1_DEFAULT);
+        root.querySelector('#pf-tope1').value = ISR_TOPE1_DEFAULT;
+        root.querySelector('#pf-t2').value = fmtPctNum(ISR_TASA2_DEFAULT);
+        root.querySelector('#pf-exen').value = EXENCION_ANUAL_ISR_DEFAULT;
+      });
+      root.querySelector('#pf-submit').addEventListener('click', async function(){
+        var data = {
+          igssRate: round4(Number(root.querySelector('#pf-igss').value)/100),
+          isrTasa1: round4(Number(root.querySelector('#pf-t1').value)/100),
+          isrTope1: round2(root.querySelector('#pf-tope1').value),
+          isrTasa2: round4(Number(root.querySelector('#pf-t2').value)/100),
+          isrExencionAnual: round2(root.querySelector('#pf-exen').value)
+        };
+        try{ await state.db.collection('empresas').doc(state.empresaActualId).update(data); toast('Parámetros actualizados'); closeSheet(); }
+        catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  /* ============================ GLOBAL WIRING ============================ */
+  document.getElementById('tabbar').addEventListener('click', function(e){
+    var btn = e.target.closest('button[data-tab]');
+    if(!btn || btn.hidden) return;
+    state.tab = btn.dataset.tab;
+    render();
+  });
+  document.getElementById('fab-btn').addEventListener('click', function(){
+    if(state.tab === 'comisiones') openComisionForm(null);
+    else openPagoForm();
+  });
+  document.getElementById('who-btn').addEventListener('click', function(){
+    signOut(auth);
+  });
+  document.getElementById('empresa-switcher').addEventListener('change', function(e){
+    state.empresaActualId = e.target.value;
+    render();
+  });
+})();
+</script>
+</body>
+</html>
