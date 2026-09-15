@@ -1801,10 +1801,6 @@ function buildDbShim(fsDb){
     if(tipo === 'recomendacion'){
       camposExtra += '<div class="field"><label for="d-fecha-egreso">Fecha de egreso (déjalo vacío si sigue activo)</label><input id="d-fecha-egreso" type="date"/></div>';
       camposExtra += '<div class="field"><label for="d-cualidades">Desempeño / cualidades a destacar</label><textarea id="d-cualidades" placeholder="Ej. responsabilidad, puntualidad, buen desempeño...">demostró responsabilidad, puntualidad y buen desempeño en sus funciones</textarea></div>';
-      camposExtra += '<div class="field-row">' +
-        '<div class="field"><label for="d-firmante">Nombre de quien recomienda</label><input id="d-firmante" value="'+esc(state.session.nombre)+'"/></div>' +
-        '<div class="field"><label for="d-puesto-firmante">Puesto</label><input id="d-puesto-firmante" placeholder="Ej. Gerente General"/></div>' +
-      '</div>';
     }
     if(tipo === 'finiquito'){
       camposExtra += '<div class="field"><label for="d-fecha-egreso2">Fecha de egreso</label><input id="d-fecha-egreso2" type="date" value="'+todayISO()+'"/></div>';
@@ -1819,6 +1815,11 @@ function buildDbShim(fsDb){
         empleadosEmpresa.map(function(e){ return '<option value="'+e.id+'" '+(preseleccionado && preseleccionado.id===e.id?'selected':'')+'>'+esc(e.nombre)+(e.activo===false?' (archivado)':'')+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label for="d-fecha">Fecha del documento</label><input id="d-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      '<div class="divider-label" style="margin-top:0;">Responsable de emitir este documento</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="d-responsable">Nombre</label><input id="d-responsable" value="'+esc(state.session.nombre)+'"/></div>' +
+        '<div class="field"><label for="d-puesto-responsable">Puesto</label><input id="d-puesto-responsable" placeholder="Ej. Gerente General"/></div>' +
+      '</div>' +
       camposExtra +
       '<p class="disclaimer">Este documento usa formatos generales que se acostumbran en Guatemala; revísalo con tu asesor legal o contador antes de entregarlo, sobre todo para despidos, suspensiones y finiquitos.</p>' +
       '<button class="btn btn-primary btn-block" id="d-submit" style="margin-top:6px;">Generar documento</button>';
@@ -1828,6 +1829,9 @@ function buildDbShim(fsDb){
         var empId = root.querySelector('#d-empleado').value;
         var emp = empleadosEmpresa.find(function(e){ return e.id === empId; });
         var fecha = root.querySelector('#d-fecha').value;
+        var responsable = root.querySelector('#d-responsable').value.trim();
+        var puestoResponsable = root.querySelector('#d-puesto-responsable').value.trim();
+        if(!responsable){ toast('Escribe el nombre del responsable de emitir el documento', true); return; }
         var datos = {};
         var contenido = '';
         var lh = buildLetterheadHtml();
@@ -1839,7 +1843,7 @@ function buildDbShim(fsDb){
             '<p><strong>A QUIEN INTERESE:</strong></p>' +
             '<p>Por este medio, '+esc(empresaActual().nombre)+', hace constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong>, quien se identifica con Documento Personal de Identificación (DPI) número '+esc(emp.dpi||'—')+', labora'+(emp.activo===false?' laboró':'')+' para esta empresa desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong>, desde el '+fechaLarga(emp.fechaIngreso)+(emp.activo===false?' hasta la fecha de su egreso':' a la fecha')+'.</p>' +
             '<p>Se extiende la presente constancia a solicitud del(de la) interesado(a), para los fines que a este convengan.</p></div>' +
-            buildFirmaSimple(root);
+            buildFirmaConResponsable(responsable, puestoResponsable);
           datos = { empleadoDpi: emp.dpi||'' };
         }
         else if(tipo === 'carta_ingresos'){
@@ -1848,7 +1852,7 @@ function buildDbShim(fsDb){
             '<p><strong>A QUIEN INTERESE:</strong></p>' +
             '<p>Por este medio, '+esc(empresaActual().nombre)+', hace constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong>, identificado(a) con DPI número '+esc(emp.dpi||'—')+', labora para esta empresa desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong> desde el '+fechaLarga(emp.fechaIngreso)+', devengando un salario mensual de <strong>'+fmtQ(emp.salarioBase)+'</strong> ('+montoEnLetras(emp.salarioBase)+').</p>' +
             '<p>Se extiende la presente a solicitud del(de la) interesado(a) para los fines que estime convenientes.</p></div>' +
-            buildFirmaSimple(root);
+            buildFirmaConResponsable(responsable, puestoResponsable);
         }
         else if(tipo === 'llamada_verbal'){
           var fechaInc = root.querySelector('#d-fecha-incidente').value;
@@ -1859,7 +1863,7 @@ function buildDbShim(fsDb){
             '<p>Por medio del presente documento se deja constancia que, en fecha '+fechaLarga(fechaInc)+', se realizó un llamado de atención de forma <strong>VERBAL</strong> al colaborador(a) arriba identificado(a), derivado de lo siguiente:</p>' +
             '<p>'+esc(motivo)+'</p>' +
             '<p>Se le recuerda la importancia de cumplir con las políticas internas y el Reglamento Interior de Trabajo de la empresa, haciéndole saber que la reincidencia en conductas similares podrá derivar en una amonestación escrita u otras medidas disciplinarias conforme al Código de Trabajo de Guatemala.</p></div>' +
-            buildFirma2Col('Firma de quien amonesta', 'Firma del colaborador (enterado)');
+            buildFirmaConResponsable(responsable, puestoResponsable, 'Firma del colaborador (enterado)');
           datos = { fechaIncidente: fechaInc, motivo: motivo };
         }
         else if(tipo === 'llamada_escrita'){
@@ -1874,7 +1878,7 @@ function buildDbShim(fsDb){
             '<p>Dicha conducta contraviene '+(normativa? esc(normativa) : 'las políticas internas de la empresa')+', por lo que se le exhorta a corregir su desempeño y conducta de forma inmediata.</p>' +
             '<p>Se le hace saber que, de reincidir en hechos similares, la empresa podrá aplicar medidas disciplinarias más severas, incluyendo la suspensión o el despido justificado, de conformidad con el artículo 77 del Código de Trabajo de Guatemala.</p>' +
             '<p>La presente amonestación quedará registrada en su expediente laboral.</p></div>' +
-            buildFirma2Col('Representante de la empresa', 'Firma del colaborador (enterado)');
+            buildFirmaConResponsable(responsable, puestoResponsable, 'Firma del colaborador (enterado)');
           datos = { fechaIncidente: fechaInc2, motivo: motivo2, normativa: normativa };
         }
         else if(tipo === 'suspension'){
@@ -1890,7 +1894,7 @@ function buildDbShim(fsDb){
             '<p>Por medio de la presente se le comunica que ha sido <strong>SUSPENDIDO(A)</strong> de sus labores'+(sinGoce? ' sin goce de salario':'')+' por un período de '+dias+' día(s), a partir del '+fechaLarga(fechaInicio)+' hasta el '+fechaLarga(fechaFinStr)+', inclusive, derivado de lo siguiente:</p>' +
             '<p>'+esc(motivo3)+'</p>' +
             '<p>Esta medida se aplica de conformidad con el Reglamento Interior de Trabajo de la empresa y/o el Código de Trabajo de Guatemala. Se le exhorta a corregir su conducta, haciéndole saber que la reincidencia podrá derivar en la terminación de su relación laboral por causa justificada.</p></div>' +
-            buildFirma2Col('Representante de la empresa', 'Firma del colaborador (enterado)');
+            buildFirmaConResponsable(responsable, puestoResponsable, 'Firma del colaborador (enterado)');
           datos = { dias: dias, fechaInicio: fechaInicio, fechaFin: fechaFinStr, sinGoce: sinGoce, motivo: motivo3 };
         }
         else if(tipo === 'despido'){
@@ -1905,22 +1909,20 @@ function buildDbShim(fsDb){
               ? '<p>La presente terminación se realiza sin causa justificada imputable al trabajador, por lo que la empresa asumirá el pago de las prestaciones e indemnización que conforme a la ley correspondan.</p>'
               : '<p>La presente terminación se realiza por causa <strong>JUSTIFICADA</strong>, de conformidad con el artículo 77 del Código de Trabajo de Guatemala, derivado de lo siguiente:</p><p>'+esc(motivo4)+'</p><p>Por lo anterior, la empresa queda exonerada del pago de indemnización, sin perjuicio del pago de las prestaciones proporcionales que en derecho correspondan (aguinaldo, bono 14 y vacaciones proporcionales, según aplique).</p>') +
             '<p>Se le indica que deberá presentarse a la empresa para la liquidación de sus prestaciones laborales.</p></div>' +
-            buildFirmaSimple(root);
+            buildFirmaConResponsable(responsable, puestoResponsable, 'Notificado (colaborador)');
           datos = { fechaEfectiva: fechaEf, responsabilidad: resp, motivo: motivo4 };
         }
         else if(tipo === 'recomendacion'){
           var fechaEgr = root.querySelector('#d-fecha-egreso').value;
           var cualidades = root.querySelector('#d-cualidades').value.trim();
-          var firmante = root.querySelector('#d-firmante').value.trim();
-          var puestoFirmante = root.querySelector('#d-puesto-firmante').value.trim();
           contenido = lh + '<h3>CARTA DE RECOMENDACIÓN</h3>' +
             '<div class="doc-body"><p>'+fc+'</p>' +
             '<p><strong>A QUIEN INTERESE:</strong></p>' +
             '<p>Por este medio hago constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong> labora'+(fechaEgr?'ó':'')+' en '+esc(empresaActual().nombre)+' desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong> desde el '+fechaLarga(emp.fechaIngreso)+(fechaEgr? ' hasta el '+fechaLarga(fechaEgr) : ' a la fecha')+'.</p>' +
             '<p>Durante su desempeño, '+esc(emp.nombre)+' '+esc(cualidades)+', por lo que lo(la) recomendamos sin reserva alguna para las funciones que desee desempeñar en el futuro.</p>' +
             '<p>Para cualquier consulta o referencia adicional, puede comunicarse a los teléfonos de la empresa.</p></div>' +
-            '<div class="doc-signature"><div class="sig-block"><div class="sig-line"></div>'+esc(firmante||state.session.nombre)+(puestoFirmante?'<br>'+esc(puestoFirmante):'')+'<br>'+esc(empresaActual().nombre)+'</div></div>';
-          datos = { fechaEgreso: fechaEgr, cualidades: cualidades, firmante: firmante, puestoFirmante: puestoFirmante };
+            buildFirmaConResponsable(responsable, puestoResponsable);
+          datos = { fechaEgreso: fechaEgr, cualidades: cualidades };
         }
         else if(tipo === 'finiquito'){
           var fechaEgr2 = root.querySelector('#d-fecha-egreso2').value;
@@ -1941,10 +1943,12 @@ function buildDbShim(fsDb){
             '<table class="doc-table">' + conceptos.map(function(c){ return '<tr><td>'+esc(c[0])+'</td><td>'+fmtQ(c[1])+'</td></tr>'; }).join('') +
             '<tr class="total"><td>TOTAL A PAGAR</td><td>'+fmtQ(total)+'</td></tr></table>' +
             '<p>El monto total antes indicado ('+montoEnLetras(total)+') ha sido pagado al colaborador(a), quien al firmar la presente declara recibirlo a su entera satisfacción y no tener reclamo laboral pendiente alguno en contra de la empresa por ningún concepto derivado de la relación de trabajo que los unió.</p></div>' +
-            buildFirma2Col('Por la empresa', 'Recibí conforme (colaborador)');
+            buildFirmaConResponsable(responsable, puestoResponsable, 'Recibí conforme (colaborador)');
           datos = { fechaEgreso: fechaEgr2, conceptos: conceptos.map(function(c){return {concepto:c[0],monto:c[1]};}), total: total };
         }
 
+        datos.responsable = responsable;
+        datos.puestoResponsable = puestoResponsable;
         try{
           await state.db.collection('documentos').add({
             empleadoId: emp.id, empleadoNombre: emp.nombre, empresaId: state.empresaActualId,
@@ -1957,14 +1961,10 @@ function buildDbShim(fsDb){
     });
   }
 
-  function buildFirmaSimple(root){
-    return '<div class="doc-signature"><div class="sig-block"><div class="sig-line"></div>Representante legal<br>'+esc(empresaActual().nombre)+'</div></div>';
-  }
-  function buildFirma2Col(labelIzq, labelDer){
-    return '<div class="doc-signature">' +
-      '<div class="sig-block"><div class="sig-line"></div>'+esc(labelIzq)+'</div>' +
-      '<div class="sig-block"><div class="sig-line"></div>'+esc(labelDer)+'</div>' +
-    '</div>';
+  function buildFirmaConResponsable(responsable, puestoResponsable, labelDer){
+    var izq = '<div class="sig-block"><div class="sig-line"></div>'+esc(responsable)+(puestoResponsable?'<br>'+esc(puestoResponsable):'')+'<br>'+esc(empresaActual().nombre)+'</div>';
+    var der = labelDer ? '<div class="sig-block"><div class="sig-line"></div>'+esc(labelDer)+'</div>' : '';
+    return '<div class="doc-signature">' + izq + der + '</div>';
   }
 
   function openDocumentoDetail(d){
