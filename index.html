@@ -251,10 +251,12 @@
   .doc-type-btn{ display:flex; flex-direction:column; align-items:flex-start; gap:4px; text-align:left; border:1px solid var(--border); border-radius:12px; padding:14px 12px; background:var(--surface-raised); cursor:pointer; }
   .doc-type-btn .dt-name{ font-weight:700; font-size:.86rem; }
   .doc-type-btn .dt-desc{ font-size:.74rem; color:var(--ink-muted); }
-  .letterhead{ display:flex; align-items:center; gap:14px; padding-bottom:14px; margin-bottom:18px; border-bottom:2px solid var(--ink); }
-  .letterhead img{ width:56px; height:56px; object-fit:contain; flex-shrink:0; }
-  .letterhead .lh-name{ font-family:"Fraunces",serif; font-weight:700; font-size:1.05rem; line-height:1.2; }
-  .letterhead .lh-detail{ font-size:.76rem; color:var(--ink-muted); line-height:1.4; }
+  .letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid var(--primary); }
+  .letterhead img{ width:68px; height:68px; object-fit:contain; flex-shrink:0; }
+  .letterhead .lh-text{ min-width:0; }
+  .letterhead .lh-name{ font-family:"Fraunces",serif; font-weight:700; font-size:1.3rem; line-height:1.2; letter-spacing:.01em; }
+  .letterhead .lh-detail{ font-size:.78rem; color:var(--ink-muted); line-height:1.55; margin-top:3px; }
+  .letterhead-rule{ height:1px; background:var(--ink); opacity:.15; margin-bottom:24px; }
   .doc-body{ font-size:.92rem; line-height:1.65; color:var(--ink); }
   .doc-body p{ margin:0 0 12px; }
   .doc-body h3{ text-align:center; font-size:1rem; letter-spacing:.04em; margin:0 0 18px; }
@@ -265,12 +267,21 @@
   .doc-table td{ padding:6px 4px; border-bottom:1px solid var(--border); }
   .doc-table td:last-child{ text-align:right; font-family:"IBM Plex Mono",monospace; }
   .doc-table tr.total td{ font-weight:700; border-top:2px solid var(--ink); border-bottom:none; }
+  .doc-footer{ display:none; }
 
+  @page { margin: 1.6cm 1.8cm 2.6cm 1.8cm; }
   @media print {
-    body > *:not(#sheet-root){ display:none !important; }
+    body *{ visibility:hidden; }
+    #sheet-root, #sheet-root *{ visibility:visible; }
+    #sheet-root{ position:absolute; top:0; left:0; width:100%; margin:0; padding:0; }
     #sheet-root .sheet-backdrop{ position:static; background:none; padding:0; display:block; opacity:1; }
-    #sheet-root .sheet{ box-shadow:none; border:none; max-height:none; overflow:visible; max-width:none; transform:none; padding:0; }
+    #sheet-root .sheet{ box-shadow:none; border:none; max-height:none; overflow:visible; max-width:none; width:100%; transform:none; padding:0; }
     #sheet-root .sheet-head, .no-print{ display:none !important; }
+    .doc-footer{
+      display:block; position:fixed; bottom:0; left:0; right:0;
+      text-align:center; font-size:.7rem; color:#555; letter-spacing:.01em;
+      border-top:1px solid #bbb; padding-top:8px; background:#fff;
+    }
   }
 </style>
 </head>
@@ -1712,9 +1723,15 @@ function buildDbShim(fsDb){
     var detalle = [em.direccion, em.telefono ? 'Tel: '+em.telefono : ''].filter(Boolean).join(' · ');
     return '<div class="letterhead">' +
       (em.logoDataUrl ? '<img src="'+em.logoDataUrl+'" alt="Logo"/>' : '') +
-      '<div><div class="lh-name">'+esc(em.nombre||'')+'</div>' +
+      '<div class="lh-text"><div class="lh-name">'+esc(em.nombre||'')+'</div>' +
       (detalle ? '<div class="lh-detail">'+esc(detalle)+'</div>' : '') +
-      '</div></div>';
+      '</div></div>' +
+      '<div class="letterhead-rule"></div>';
+  }
+  function buildFooterHtml(){
+    var em = empresaActual();
+    var partes = [em.direccion, em.telefono ? 'Tel: '+em.telefono : ''].filter(Boolean);
+    return '<div class="doc-footer">'+esc(em.nombre||'')+(partes.length ? ' · '+esc(partes.join(' · ')) : '')+'</div>';
   }
   function lineaFechaCiudad(fechaISO){
     var em = empresaActual();
@@ -1947,6 +1964,7 @@ function buildDbShim(fsDb){
           datos = { fechaEgreso: fechaEgr2, conceptos: conceptos.map(function(c){return {concepto:c[0],monto:c[1]};}), total: total };
         }
 
+        contenido += buildFooterHtml();
         datos.responsable = responsable;
         datos.puestoResponsable = puestoResponsable;
         try{
