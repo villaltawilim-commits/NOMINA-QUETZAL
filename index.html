@@ -246,6 +246,32 @@
   .birthday-card .bc-name{ font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .birthday-card .bc-day{ flex-shrink:0; font-weight:700; }
   .divider-label{ font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:600; margin:18px 0 8px; }
+
+  .doc-type-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .doc-type-btn{ display:flex; flex-direction:column; align-items:flex-start; gap:4px; text-align:left; border:1px solid var(--border); border-radius:12px; padding:14px 12px; background:var(--surface-raised); cursor:pointer; }
+  .doc-type-btn .dt-name{ font-weight:700; font-size:.86rem; }
+  .doc-type-btn .dt-desc{ font-size:.74rem; color:var(--ink-muted); }
+  .letterhead{ display:flex; align-items:center; gap:14px; padding-bottom:14px; margin-bottom:18px; border-bottom:2px solid var(--ink); }
+  .letterhead img{ width:56px; height:56px; object-fit:contain; flex-shrink:0; }
+  .letterhead .lh-name{ font-family:"Fraunces",serif; font-weight:700; font-size:1.05rem; line-height:1.2; }
+  .letterhead .lh-detail{ font-size:.76rem; color:var(--ink-muted); line-height:1.4; }
+  .doc-body{ font-size:.92rem; line-height:1.65; color:var(--ink); }
+  .doc-body p{ margin:0 0 12px; }
+  .doc-body h3{ text-align:center; font-size:1rem; letter-spacing:.04em; margin:0 0 18px; }
+  .doc-signature{ margin-top:52px; display:flex; gap:24px; flex-wrap:wrap; }
+  .doc-signature .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.86rem; }
+  .doc-signature .sig-line{ border-top:1px solid var(--ink); margin-bottom:6px; padding-top:6px; }
+  .doc-table{ width:100%; border-collapse:collapse; margin:14px 0; font-size:.88rem; }
+  .doc-table td{ padding:6px 4px; border-bottom:1px solid var(--border); }
+  .doc-table td:last-child{ text-align:right; font-family:"IBM Plex Mono",monospace; }
+  .doc-table tr.total td{ font-weight:700; border-top:2px solid var(--ink); border-bottom:none; }
+
+  @media print {
+    body > *:not(#sheet-root){ display:none !important; }
+    #sheet-root .sheet-backdrop{ position:static; background:none; padding:0; display:block; opacity:1; }
+    #sheet-root .sheet{ box-shadow:none; border:none; max-height:none; overflow:visible; max-width:none; transform:none; padding:0; }
+    #sheet-root .sheet-head, .no-print{ display:none !important; }
+  }
 </style>
 </head>
 <body>
@@ -272,6 +298,7 @@
       <section id="view-empleados" hidden></section>
       <section id="view-nomina" hidden></section>
       <section id="view-comisiones" hidden></section>
+      <section id="view-documentos" hidden></section>
       <section id="view-equipo" hidden></section>
       <section id="view-sin-empresa" hidden></section>
     </main>
@@ -296,6 +323,10 @@
       <button data-tab="comisiones">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M9 11l3-3 3 3"/></svg>
         <span>Comisiones</span>
+      </button>
+      <button data-tab="documentos">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M8 8h8M8 12h8"/><path d="M8 16c1-1 2-1 3 0s2 1 3 0"/></svg>
+        <span>Documentos</span>
       </button>
       <button data-tab="equipo" id="tab-equipo-btn">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="9" r="3"/><circle cx="16" cy="10.5" r="2.6"/><path d="M3.5 19c.9-3.2 3-4.8 5.5-4.8s4.6 1.6 5.5 4.8M14.3 15c2 .3 3.5 1.7 4.1 4"/></svg>
@@ -387,6 +418,59 @@ function buildDbShim(fsDb){
     return ((parts[0]||"")[0]||"?").toUpperCase() + ((parts[1]||"")[0]||"").toUpperCase();
   }
   function todayISO(){ return new Date().toISOString().slice(0,10); }
+  function fechaLarga(fechaISO){
+    if(!fechaISO) return '';
+    var d = new Date(fechaISO + 'T00:00:00');
+    if(isNaN(d.getTime())) return fechaISO;
+    return d.getDate() + ' de ' + MESES[d.getMonth()].toLowerCase() + ' de ' + d.getFullYear();
+  }
+  function numeroEnLetras(n){
+    n = Math.floor(Math.abs(Number(n)||0));
+    if(n === 0) return 'cero';
+    var UNIDADES = ['', 'un', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve'];
+    var ESPECIALES = ['diez','once','doce','trece','catorce','quince','dieciséis','diecisiete','dieciocho','diecinueve'];
+    var DECENAS = ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+    var CENTENAS = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+    function tresDigitos(num){
+      if(num === 0) return '';
+      if(num === 100) return 'cien';
+      var c = Math.floor(num/100), r = num % 100;
+      var partes = [];
+      if(c) partes.push(CENTENAS[c]);
+      if(r){
+        if(r < 10) partes.push(UNIDADES[r]);
+        else if(r < 20) partes.push(ESPECIALES[r-10]);
+        else {
+          var d10 = Math.floor(r/10), u = r % 10;
+          if(d10 === 2 && u) partes.push('veinti' + UNIDADES[u]);
+          else if(u) partes.push(DECENAS[d10] + ' y ' + UNIDADES[u]);
+          else partes.push(DECENAS[d10]);
+        }
+      }
+      return partes.join(' ');
+    }
+    function bloque(num, singular, plural){
+      if(num === 0) return '';
+      if(num === 1) return singular;
+      return tresDigitos(num) + ' ' + plural;
+    }
+    var millones = Math.floor(n / 1000000);
+    var miles = Math.floor((n % 1000000) / 1000);
+    var resto = n % 1000;
+    var partes = [];
+    if(millones) partes.push(bloque(millones, 'un millón', 'millones'));
+    if(miles) partes.push(miles === 1 ? 'mil' : tresDigitos(miles) + ' mil');
+    if(resto) partes.push(tresDigitos(resto));
+    return partes.join(' ').trim();
+  }
+  function montoEnLetras(monto){
+    var v = round2(monto);
+    var entero = Math.floor(v);
+    var centavos = Math.round((v - entero) * 100);
+    var letras = numeroEnLetras(entero);
+    letras = letras.charAt(0).toUpperCase() + letras.slice(1);
+    return letras + ' quetzales con ' + (centavos < 10 ? '0'+centavos : centavos) + '/100';
+  }
 
   function getIgssRate(){
     var v = empresaActual().igssRate;
@@ -554,11 +638,12 @@ function buildDbShim(fsDb){
     pagos: [],
     prestamos: [],
     comisiones: [],
+    documentos: [],
     equipo: [],
     empresas: [],
     empresaActualId: null,
     tab: "resumen",
-    filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "" }
+    filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
   };
 
   function toast(msg, isError){
@@ -624,6 +709,11 @@ function buildDbShim(fsDb){
       state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
     }, function(err){ if(state.authUser) toast('No se pudo sincronizar comisiones: ' + err.code, true); }));
+
+    unsubscribes.push(db.collection('documentos').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+      state.documentos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar documentos: ' + err.code, true); }));
 
     unsubscribes.push(db.collection('equipo').onSnapshot(function(snap){
       state.equipo = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
@@ -759,7 +849,7 @@ function buildDbShim(fsDb){
       teardownFirestoreListeners();
       state.authUser = null;
       state.session = null;
-      state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = [];
+      state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null;
       showLoginScreen();
     }
@@ -793,7 +883,7 @@ function buildDbShim(fsDb){
     var sinEmpresa = !state.empresaActualId && state.tab !== 'equipo';
     document.querySelectorAll('#tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === state.tab); });
     document.getElementById('fab-btn').style.display = (sinEmpresa || state.tab === 'equipo') ? 'none' : 'flex';
-    ['resumen','empleados','nomina','comisiones','equipo','sin-empresa'].forEach(function(t){
+    ['resumen','empleados','nomina','comisiones','documentos','equipo','sin-empresa'].forEach(function(t){
       document.getElementById('view-'+t).hidden = true;
     });
     if(sinEmpresa){ document.getElementById('view-sin-empresa').hidden = false; renderSinEmpresa(); return; }
@@ -802,6 +892,7 @@ function buildDbShim(fsDb){
     if(state.tab === 'empleados') renderEmpleados();
     if(state.tab === 'nomina') renderNomina();
     if(state.tab === 'comisiones') renderComisiones();
+    if(state.tab === 'documentos') renderDocumentos();
     if(state.tab === 'equipo') renderEquipo();
   }
 
@@ -1011,6 +1102,8 @@ function buildDbShim(fsDb){
       .sort(function(a,b){ return (b.creadoEn||'').localeCompare(a.creadoEn||''); });
     var comisionesEmp = state.comisiones.filter(function(c){ return c.empleadoId === emp.id; })
       .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    var documentosEmp = state.documentos.filter(function(d){ return d.empleadoId === emp.id; })
+      .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
     var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
     var body =
       (igssOn && isrOn? '' : '<div class="banner">'+(!igssOn&&!isrOn?'IGSS e ISR están desactivados':(!igssOn?'IGSS está desactivado':'ISR está desactivado'))+' para este empleado.</div>') +
@@ -1039,6 +1132,8 @@ function buildDbShim(fsDb){
       '<div id="prestamos-wrap">'+(prestamosEmp.length? '<div class="ledger">'+prestamosEmp.map(prestamoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin préstamos ni descuentos registrados</div>')+'</div>' +
       '<div class="section-title"><h2>Comisiones</h2><button class="link-btn" id="add-comision">+ Nueva</button></div>' +
       '<div id="comisiones-emp-wrap">'+(comisionesEmp.length? '<div class="ledger">'+comisionesEmp.map(comisionRowHtml).join('')+'</div>' : '<div class="empty-state">Sin comisiones registradas</div>')+'</div>' +
+      '<div class="section-title"><h2>Documentos</h2><button class="link-btn" id="add-documento">+ Nuevo</button></div>' +
+      '<div id="documentos-emp-wrap">'+(documentosEmp.length? '<div class="ledger">'+documentosEmp.map(documentoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin documentos generados</div>')+'</div>' +
       '<div class="divider-label">Historial de pagos</div>' +
       '<div id="hist-wrap">'+(historial.length? '<div class="ledger">'+historial.map(pagoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin pagos registrados</div>')+'</div>' +
       '<div class="section-title" style="margin-top:20px;">' +
@@ -1053,6 +1148,8 @@ function buildDbShim(fsDb){
       root.querySelector('#add-prestamo').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openPrestamoForm(emp); }, 230); });
       if(comisionesEmp.length){ wireLedgerRows(root.querySelector('#comisiones-emp-wrap'), comisionesEmp, function(c){ closeSheet(); setTimeout(function(){ openComisionDetail(c); }, 230); }); }
       root.querySelector('#add-comision').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openComisionForm(emp); }, 230); });
+      if(documentosEmp.length){ wireLedgerRows(root.querySelector('#documentos-emp-wrap'), documentosEmp, function(d){ closeSheet(); setTimeout(function(){ openDocumentoDetail(d); }, 230); }); }
+      root.querySelector('#add-documento').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openDocumentoTipoPicker(emp); }, 230); });
       root.querySelector('#edit-emp').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openEmpleadoForm(emp); }, 230); });
       root.querySelector('#toggle-emp').addEventListener('click', async function(){
         try{ await state.db.collection('empleados').doc(emp.id).update({activo: emp.activo===false}); toast(emp.activo===false?'Empleado reactivado':'Empleado archivado'); closeSheet(); }
@@ -1598,6 +1695,297 @@ function buildDbShim(fsDb){
     });
   }
 
+  /* ============================ DOCUMENTOS ============================ */
+  var TIPOS_DOCUMENTO = {
+    constancia_laboral: { nombre: 'Constancia laboral', desc: 'Confirma que trabaja aquí, sin mencionar salario' },
+    carta_ingresos: { nombre: 'Carta de ingresos', desc: 'Constancia de salario, para bancos o trámites' },
+    llamada_verbal: { nombre: 'Llamada de atención verbal', desc: 'Registro escrito de una amonestación verbal' },
+    llamada_escrita: { nombre: 'Amonestación escrita', desc: 'Llamado de atención formal por escrito' },
+    suspension: { nombre: 'Carta de suspensión', desc: 'Suspende al colaborador por un número de días' },
+    despido: { nombre: 'Carta de despido', desc: 'Termina la relación laboral, con o sin causa justificada' },
+    recomendacion: { nombre: 'Carta de recomendación', desc: 'Referencia laboral para el colaborador' },
+    finiquito: { nombre: 'Finiquito / liquidación', desc: 'Detalle de prestaciones y pago final' }
+  };
+
+  function buildLetterheadHtml(){
+    var em = empresaActual();
+    var detalle = [em.direccion, em.telefono ? 'Tel: '+em.telefono : ''].filter(Boolean).join(' · ');
+    return '<div class="letterhead">' +
+      (em.logoDataUrl ? '<img src="'+em.logoDataUrl+'" alt="Logo"/>' : '') +
+      '<div><div class="lh-name">'+esc(em.nombre||'')+'</div>' +
+      (detalle ? '<div class="lh-detail">'+esc(detalle)+'</div>' : '') +
+      '</div></div>';
+  }
+  function lineaFechaCiudad(fechaISO){
+    var em = empresaActual();
+    return esc(em.ciudad || 'Guatemala') + ', ' + fechaLarga(fechaISO) + '.';
+  }
+
+  function renderDocumentos(){
+    var el = document.getElementById('view-documentos');
+    var q = (state.filters.documentosQuery||'').toLowerCase();
+    var lista = state.documentos.filter(function(d){ return d.empresaId === state.empresaActualId; })
+      .filter(function(d){ return !q || (d.empleadoNombre||'').toLowerCase().indexOf(q) > -1; })
+      .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    el.innerHTML =
+      '<div class="view-head"><h1>Documentos</h1><p>Cartas y amonestaciones</p></div>' +
+      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="doc-search" placeholder="Buscar por empleado" value="'+esc(state.filters.documentosQuery||'')+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="qa-nuevo-doc" style="margin-bottom:14px;">+ Nuevo documento</button>' +
+      '<div id="documentos-wrap"></div>';
+    document.getElementById('doc-search').addEventListener('input', function(e){ state.filters.documentosQuery = e.target.value; renderDocumentos(); });
+    document.getElementById('qa-nuevo-doc').addEventListener('click', function(){ openDocumentoTipoPicker(null); });
+    var wrap = document.getElementById('documentos-wrap');
+    if(lista.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin documentos generados</div>Usa el botón de arriba para crear el primero.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + lista.map(documentoRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, lista, openDocumentoDetail);
+    }
+  }
+
+  function documentoRowHtml(d){
+    var meta = TIPOS_DOCUMENTO[d.tipo] || { nombre: d.tipo };
+    return '<button class="ledger-row" data-id="'+d.id+'">' +
+      '<span class="status-bar good"></span>' +
+      '<span class="row-main"><span class="title">'+esc(d.empleadoNombre)+'</span><span class="sub">'+esc(meta.nombre)+' · '+esc(d.fecha)+'</span></span>' +
+      '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+    '</button>';
+  }
+
+  function openDocumentoTipoPicker(preseleccionado){
+    var body = '<div class="doc-type-grid">' +
+      Object.keys(TIPOS_DOCUMENTO).map(function(key){
+        var t = TIPOS_DOCUMENTO[key];
+        return '<button class="doc-type-btn" data-tipo="'+key+'"><span class="dt-name">'+esc(t.nombre)+'</span><span class="dt-desc">'+esc(t.desc)+'</span></button>';
+      }).join('') +
+    '</div>';
+    openSheet('Nuevo documento', body, function(root){
+      root.querySelectorAll('.doc-type-btn').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var tipo = btn.dataset.tipo;
+          closeSheet();
+          setTimeout(function(){ openDocumentoForm(tipo, preseleccionado); }, 230);
+        });
+      });
+    });
+  }
+
+  function openDocumentoForm(tipo, preseleccionado){
+    var meta = TIPOS_DOCUMENTO[tipo];
+    var empleadosEmpresa = ordenarPorIngreso(state.empleados.filter(function(e){ return e.empresaId === state.empresaActualId; }));
+    if(empleadosEmpresa.length === 0){ toast('Agrega primero un empleado', true); return; }
+
+    var camposExtra = '';
+    if(tipo === 'llamada_verbal' || tipo === 'llamada_escrita' || tipo === 'suspension'){
+      camposExtra += '<div class="field"><label for="d-fecha-incidente">Fecha del hecho</label><input id="d-fecha-incidente" type="date" value="'+todayISO()+'"/></div>';
+      camposExtra += '<div class="field"><label for="d-motivo">Motivo / descripción</label><textarea id="d-motivo" placeholder="Describe lo sucedido"></textarea></div>';
+    }
+    if(tipo === 'llamada_escrita'){
+      camposExtra += '<div class="field"><label for="d-normativa">Norma o política citada (opcional)</label><input id="d-normativa" placeholder="Ej. Reglamento Interior de Trabajo"/></div>';
+    }
+    if(tipo === 'suspension'){
+      camposExtra += '<div class="field-row">' +
+        '<div class="field"><label for="d-dias">Días de suspensión</label><input id="d-dias" type="number" min="1" step="1" value="1"/></div>' +
+        '<div class="field"><label for="d-fecha-inicio">Inicia el</label><input id="d-fecha-inicio" type="date" value="'+todayISO()+'"/></div>' +
+      '</div>';
+      camposExtra += '<div class="field switch-card"><div class="switch-text"><div class="t1">Sin goce de salario</div></div><label class="switch"><input type="checkbox" id="d-sin-goce" checked/><span class="switch-track"></span></label></div>';
+    }
+    if(tipo === 'despido'){
+      camposExtra += '<div class="field"><label for="d-fecha-efectiva">Fecha efectiva</label><input id="d-fecha-efectiva" type="date" value="'+todayISO()+'"/></div>';
+      camposExtra += '<div class="field"><label>Tipo de despido</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="d-resp" value="con" checked/><span>Con responsabilidad patronal</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="d-resp" value="sin"/><span>Sin responsabilidad (justificado)</span></label>' +
+      '</div></div>';
+      camposExtra += '<div class="field"><label for="d-motivo">Motivo / causal (Art. 77 si aplica)</label><textarea id="d-motivo" placeholder="Describe la causa del despido"></textarea></div>';
+    }
+    if(tipo === 'recomendacion'){
+      camposExtra += '<div class="field"><label for="d-fecha-egreso">Fecha de egreso (déjalo vacío si sigue activo)</label><input id="d-fecha-egreso" type="date"/></div>';
+      camposExtra += '<div class="field"><label for="d-cualidades">Desempeño / cualidades a destacar</label><textarea id="d-cualidades" placeholder="Ej. responsabilidad, puntualidad, buen desempeño...">demostró responsabilidad, puntualidad y buen desempeño en sus funciones</textarea></div>';
+      camposExtra += '<div class="field-row">' +
+        '<div class="field"><label for="d-firmante">Nombre de quien recomienda</label><input id="d-firmante" value="'+esc(state.session.nombre)+'"/></div>' +
+        '<div class="field"><label for="d-puesto-firmante">Puesto</label><input id="d-puesto-firmante" placeholder="Ej. Gerente General"/></div>' +
+      '</div>';
+    }
+    if(tipo === 'finiquito'){
+      camposExtra += '<div class="field"><label for="d-fecha-egreso2">Fecha de egreso</label><input id="d-fecha-egreso2" type="date" value="'+todayISO()+'"/></div>';
+      ['salPend:Salario(s) pendiente(s)','aguinaldo:Aguinaldo proporcional','bono14:Bono 14 proporcional','vacaciones:Vacaciones proporcionales','indemnizacion:Indemnización','otros:Otros'].forEach(function(par){
+        var partes = par.split(':');
+        camposExtra += '<div class="field"><label for="d-'+partes[0]+'">'+partes[1]+' (Q)</label><input id="d-'+partes[0]+'" type="number" min="0" step="0.01" value="0"/></div>';
+      });
+    }
+
+    var body =
+      '<div class="field"><label for="d-empleado">Empleado</label><select id="d-empleado">' +
+        empleadosEmpresa.map(function(e){ return '<option value="'+e.id+'" '+(preseleccionado && preseleccionado.id===e.id?'selected':'')+'>'+esc(e.nombre)+(e.activo===false?' (archivado)':'')+'</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label for="d-fecha">Fecha del documento</label><input id="d-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      camposExtra +
+      '<p class="disclaimer">Este documento usa formatos generales que se acostumbran en Guatemala; revísalo con tu asesor legal o contador antes de entregarlo, sobre todo para despidos, suspensiones y finiquitos.</p>' +
+      '<button class="btn btn-primary btn-block" id="d-submit" style="margin-top:6px;">Generar documento</button>';
+
+    openSheet(meta.nombre, body, function(root){
+      root.querySelector('#d-submit').addEventListener('click', async function(){
+        var empId = root.querySelector('#d-empleado').value;
+        var emp = empleadosEmpresa.find(function(e){ return e.id === empId; });
+        var fecha = root.querySelector('#d-fecha').value;
+        var datos = {};
+        var contenido = '';
+        var lh = buildLetterheadHtml();
+        var fc = lineaFechaCiudad(fecha);
+
+        if(tipo === 'constancia_laboral'){
+          contenido = lh + '<h3>CONSTANCIA LABORAL</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p><strong>A QUIEN INTERESE:</strong></p>' +
+            '<p>Por este medio, '+esc(empresaActual().nombre)+', hace constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong>, quien se identifica con Documento Personal de Identificación (DPI) número '+esc(emp.dpi||'—')+', labora'+(emp.activo===false?' laboró':'')+' para esta empresa desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong>, desde el '+fechaLarga(emp.fechaIngreso)+(emp.activo===false?' hasta la fecha de su egreso':' a la fecha')+'.</p>' +
+            '<p>Se extiende la presente constancia a solicitud del(de la) interesado(a), para los fines que a este convengan.</p></div>' +
+            buildFirmaSimple(root);
+          datos = { empleadoDpi: emp.dpi||'' };
+        }
+        else if(tipo === 'carta_ingresos'){
+          contenido = lh + '<h3>CONSTANCIA DE INGRESOS</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p><strong>A QUIEN INTERESE:</strong></p>' +
+            '<p>Por este medio, '+esc(empresaActual().nombre)+', hace constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong>, identificado(a) con DPI número '+esc(emp.dpi||'—')+', labora para esta empresa desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong> desde el '+fechaLarga(emp.fechaIngreso)+', devengando un salario mensual de <strong>'+fmtQ(emp.salarioBase)+'</strong> ('+montoEnLetras(emp.salarioBase)+').</p>' +
+            '<p>Se extiende la presente a solicitud del(de la) interesado(a) para los fines que estime convenientes.</p></div>' +
+            buildFirmaSimple(root);
+        }
+        else if(tipo === 'llamada_verbal'){
+          var fechaInc = root.querySelector('#d-fecha-incidente').value;
+          var motivo = root.querySelector('#d-motivo').value.trim();
+          contenido = lh + '<h3>REGISTRO DE LLAMADA DE ATENCIÓN VERBAL</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p>Empleado: <strong>'+esc(emp.nombre)+'</strong> — Puesto: '+esc(emp.puesto||'—')+'</p>' +
+            '<p>Por medio del presente documento se deja constancia que, en fecha '+fechaLarga(fechaInc)+', se realizó un llamado de atención de forma <strong>VERBAL</strong> al colaborador(a) arriba identificado(a), derivado de lo siguiente:</p>' +
+            '<p>'+esc(motivo)+'</p>' +
+            '<p>Se le recuerda la importancia de cumplir con las políticas internas y el Reglamento Interior de Trabajo de la empresa, haciéndole saber que la reincidencia en conductas similares podrá derivar en una amonestación escrita u otras medidas disciplinarias conforme al Código de Trabajo de Guatemala.</p></div>' +
+            buildFirma2Col('Firma de quien amonesta', 'Firma del colaborador (enterado)');
+          datos = { fechaIncidente: fechaInc, motivo: motivo };
+        }
+        else if(tipo === 'llamada_escrita'){
+          var fechaInc2 = root.querySelector('#d-fecha-incidente').value;
+          var motivo2 = root.querySelector('#d-motivo').value.trim();
+          var normativa = root.querySelector('#d-normativa').value.trim();
+          contenido = lh + '<h3>AMONESTACIÓN ESCRITA</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p>Señor(a): <strong>'+esc(emp.nombre)+'</strong><br>Puesto: '+esc(emp.puesto||'—')+'</p>' +
+            '<p>Por medio de la presente, '+esc(empresaActual().nombre)+' le hace una <strong>LLAMADA DE ATENCIÓN POR ESCRITO</strong>, derivada de los siguientes hechos ocurridos el '+fechaLarga(fechaInc2)+':</p>' +
+            '<p>'+esc(motivo2)+'</p>' +
+            '<p>Dicha conducta contraviene '+(normativa? esc(normativa) : 'las políticas internas de la empresa')+', por lo que se le exhorta a corregir su desempeño y conducta de forma inmediata.</p>' +
+            '<p>Se le hace saber que, de reincidir en hechos similares, la empresa podrá aplicar medidas disciplinarias más severas, incluyendo la suspensión o el despido justificado, de conformidad con el artículo 77 del Código de Trabajo de Guatemala.</p>' +
+            '<p>La presente amonestación quedará registrada en su expediente laboral.</p></div>' +
+            buildFirma2Col('Representante de la empresa', 'Firma del colaborador (enterado)');
+          datos = { fechaIncidente: fechaInc2, motivo: motivo2, normativa: normativa };
+        }
+        else if(tipo === 'suspension'){
+          var dias = Math.max(1, parseInt(root.querySelector('#d-dias').value,10)||1);
+          var fechaInicio = root.querySelector('#d-fecha-inicio').value;
+          var sinGoce = root.querySelector('#d-sin-goce').checked;
+          var motivo3 = root.querySelector('#d-motivo').value.trim();
+          var dFin = new Date(fechaInicio + 'T00:00:00'); dFin.setDate(dFin.getDate() + dias - 1);
+          var fechaFinStr = dFin.toISOString().slice(0,10);
+          contenido = lh + '<h3>CARTA DE SUSPENSIÓN</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p>Señor(a): <strong>'+esc(emp.nombre)+'</strong><br>Puesto: '+esc(emp.puesto||'—')+'</p>' +
+            '<p>Por medio de la presente se le comunica que ha sido <strong>SUSPENDIDO(A)</strong> de sus labores'+(sinGoce? ' sin goce de salario':'')+' por un período de '+dias+' día(s), a partir del '+fechaLarga(fechaInicio)+' hasta el '+fechaLarga(fechaFinStr)+', inclusive, derivado de lo siguiente:</p>' +
+            '<p>'+esc(motivo3)+'</p>' +
+            '<p>Esta medida se aplica de conformidad con el Reglamento Interior de Trabajo de la empresa y/o el Código de Trabajo de Guatemala. Se le exhorta a corregir su conducta, haciéndole saber que la reincidencia podrá derivar en la terminación de su relación laboral por causa justificada.</p></div>' +
+            buildFirma2Col('Representante de la empresa', 'Firma del colaborador (enterado)');
+          datos = { dias: dias, fechaInicio: fechaInicio, fechaFin: fechaFinStr, sinGoce: sinGoce, motivo: motivo3 };
+        }
+        else if(tipo === 'despido'){
+          var fechaEf = root.querySelector('#d-fecha-efectiva').value;
+          var resp = root.querySelector('input[name=d-resp]:checked').value;
+          var motivo4 = root.querySelector('#d-motivo').value.trim();
+          contenido = lh + '<h3>CARTA DE DESPIDO</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p>Señor(a): <strong>'+esc(emp.nombre)+'</strong><br>Puesto: '+esc(emp.puesto||'—')+'</p>' +
+            '<p>Por medio de la presente se le comunica la terminación de su relación laboral con '+esc(empresaActual().nombre)+', con efectos a partir del '+fechaLarga(fechaEf)+'.</p>' +
+            (resp === 'con'
+              ? '<p>La presente terminación se realiza sin causa justificada imputable al trabajador, por lo que la empresa asumirá el pago de las prestaciones e indemnización que conforme a la ley correspondan.</p>'
+              : '<p>La presente terminación se realiza por causa <strong>JUSTIFICADA</strong>, de conformidad con el artículo 77 del Código de Trabajo de Guatemala, derivado de lo siguiente:</p><p>'+esc(motivo4)+'</p><p>Por lo anterior, la empresa queda exonerada del pago de indemnización, sin perjuicio del pago de las prestaciones proporcionales que en derecho correspondan (aguinaldo, bono 14 y vacaciones proporcionales, según aplique).</p>') +
+            '<p>Se le indica que deberá presentarse a la empresa para la liquidación de sus prestaciones laborales.</p></div>' +
+            buildFirmaSimple(root);
+          datos = { fechaEfectiva: fechaEf, responsabilidad: resp, motivo: motivo4 };
+        }
+        else if(tipo === 'recomendacion'){
+          var fechaEgr = root.querySelector('#d-fecha-egreso').value;
+          var cualidades = root.querySelector('#d-cualidades').value.trim();
+          var firmante = root.querySelector('#d-firmante').value.trim();
+          var puestoFirmante = root.querySelector('#d-puesto-firmante').value.trim();
+          contenido = lh + '<h3>CARTA DE RECOMENDACIÓN</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p><strong>A QUIEN INTERESE:</strong></p>' +
+            '<p>Por este medio hago constar que el(la) señor(a) <strong>'+esc(emp.nombre)+'</strong> labora'+(fechaEgr?'ó':'')+' en '+esc(empresaActual().nombre)+' desempeñando el puesto de <strong>'+esc(emp.puesto||'—')+'</strong> desde el '+fechaLarga(emp.fechaIngreso)+(fechaEgr? ' hasta el '+fechaLarga(fechaEgr) : ' a la fecha')+'.</p>' +
+            '<p>Durante su desempeño, '+esc(emp.nombre)+' '+esc(cualidades)+', por lo que lo(la) recomendamos sin reserva alguna para las funciones que desee desempeñar en el futuro.</p>' +
+            '<p>Para cualquier consulta o referencia adicional, puede comunicarse a los teléfonos de la empresa.</p></div>' +
+            '<div class="doc-signature"><div class="sig-block"><div class="sig-line"></div>'+esc(firmante||state.session.nombre)+(puestoFirmante?'<br>'+esc(puestoFirmante):'')+'<br>'+esc(empresaActual().nombre)+'</div></div>';
+          datos = { fechaEgreso: fechaEgr, cualidades: cualidades, firmante: firmante, puestoFirmante: puestoFirmante };
+        }
+        else if(tipo === 'finiquito'){
+          var fechaEgr2 = root.querySelector('#d-fecha-egreso2').value;
+          var conceptos = [
+            ['Salario(s) pendiente(s)', Number(root.querySelector('#d-salPend').value)||0],
+            ['Aguinaldo proporcional', Number(root.querySelector('#d-aguinaldo').value)||0],
+            ['Bono 14 proporcional', Number(root.querySelector('#d-bono14').value)||0],
+            ['Vacaciones proporcionales', Number(root.querySelector('#d-vacaciones').value)||0],
+            ['Indemnización', Number(root.querySelector('#d-indemnizacion').value)||0],
+            ['Otros', Number(root.querySelector('#d-otros').value)||0]
+          ];
+          var total = conceptos.reduce(function(s,c){ return s + c[1]; }, 0);
+          contenido = lh + '<h3>FINIQUITO LABORAL</h3>' +
+            '<div class="doc-body"><p>'+fc+'</p>' +
+            '<p>Empleado: <strong>'+esc(emp.nombre)+'</strong> — Puesto: '+esc(emp.puesto||'—')+'<br>' +
+            'Fecha de ingreso: '+esc(emp.fechaIngreso||'—')+' · Fecha de egreso: '+esc(fechaEgr2)+'</p>' +
+            '<p>Por este medio se hace constar la liquidación final de prestaciones laborales correspondientes al colaborador(a) arriba identificado(a), conforme al siguiente detalle:</p>' +
+            '<table class="doc-table">' + conceptos.map(function(c){ return '<tr><td>'+esc(c[0])+'</td><td>'+fmtQ(c[1])+'</td></tr>'; }).join('') +
+            '<tr class="total"><td>TOTAL A PAGAR</td><td>'+fmtQ(total)+'</td></tr></table>' +
+            '<p>El monto total antes indicado ('+montoEnLetras(total)+') ha sido pagado al colaborador(a), quien al firmar la presente declara recibirlo a su entera satisfacción y no tener reclamo laboral pendiente alguno en contra de la empresa por ningún concepto derivado de la relación de trabajo que los unió.</p></div>' +
+            buildFirma2Col('Por la empresa', 'Recibí conforme (colaborador)');
+          datos = { fechaEgreso: fechaEgr2, conceptos: conceptos.map(function(c){return {concepto:c[0],monto:c[1]};}), total: total };
+        }
+
+        try{
+          await state.db.collection('documentos').add({
+            empleadoId: emp.id, empleadoNombre: emp.nombre, empresaId: state.empresaActualId,
+            tipo: tipo, fecha: fecha, datos: datos, contenidoHtml: contenido,
+            generadoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          });
+          toast('Documento generado'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function buildFirmaSimple(root){
+    return '<div class="doc-signature"><div class="sig-block"><div class="sig-line"></div>Representante legal<br>'+esc(empresaActual().nombre)+'</div></div>';
+  }
+  function buildFirma2Col(labelIzq, labelDer){
+    return '<div class="doc-signature">' +
+      '<div class="sig-block"><div class="sig-line"></div>'+esc(labelIzq)+'</div>' +
+      '<div class="sig-block"><div class="sig-line"></div>'+esc(labelDer)+'</div>' +
+    '</div>';
+  }
+
+  function openDocumentoDetail(d){
+    var meta = TIPOS_DOCUMENTO[d.tipo] || { nombre: d.tipo };
+    var body =
+      '<div id="print-area">' + d.contenidoHtml + '</div>' +
+      '<div class="no-print" style="margin-top:24px;">' +
+        '<div class="breakdown-row" style="padding:0 2px;"><span>Generado por</span><span>'+esc(d.generadoPor||'—')+'</span></div>' +
+        '<button class="btn btn-primary btn-block" id="doc-imprimir" style="margin-top:14px;">Imprimir / Guardar como PDF</button>' +
+        '<button class="btn btn-danger btn-block" id="doc-eliminar" style="margin-top:8px;">Eliminar documento</button>' +
+      '</div>';
+    openSheet(meta.nombre, body, function(root){
+      root.querySelector('#doc-imprimir').addEventListener('click', function(){ window.print(); });
+      root.querySelector('#doc-eliminar').addEventListener('click', async function(){
+        if(!confirm('¿Eliminar este documento? Esta acción no se puede deshacer.')) return;
+        try{ await state.db.collection('documentos').doc(d.id).delete(); toast('Documento eliminado'); closeSheet(); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
+  }
+
   /* ============================ EQUIPO ============================ */
   function renderEquipo(){
     var el = document.getElementById('view-equipo');
@@ -1685,7 +2073,19 @@ function buildDbShim(fsDb){
     var miembros = state.equipo.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
     var body =
       '<div class="field"><label for="ed-nombre">Nombre</label><input id="ed-nombre" value="'+esc(empresa.nombre)+'"/></div>' +
-      '<div class="divider-label" style="margin-top:0;">Usuarios con acceso</div>' +
+      '<div class="divider-label" style="margin-top:0;">Datos para cartas y documentos oficiales</div>' +
+      '<div class="field">' +
+        '<label>Logo</label>' +
+        '<div style="display:flex;align-items:center;gap:12px;">' +
+          '<div id="ed-logo-preview" style="width:56px;height:56px;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff;flex-shrink:0;">'+(empresa.logoDataUrl? '<img src="'+empresa.logoDataUrl+'" style="width:100%;height:100%;object-fit:contain;"/>' : '<span style="font-size:.7rem;color:var(--ink-faint);">Sin logo</span>')+'</div>' +
+          '<input type="file" id="ed-logo-file" accept="image/*" style="flex:1;"/>' +
+        '</div>' +
+        '<p class="hint">Aparecerá en el encabezado de las cartas y constancias.</p>' +
+      '</div>' +
+      '<div class="field"><label for="ed-ciudad">Ciudad (para la fecha de las cartas)</label><input id="ed-ciudad" value="'+esc(empresa.ciudad||'')+'" placeholder="Ej. Santa Elena, Petén"/></div>' +
+      '<div class="field"><label for="ed-direccion">Dirección</label><textarea id="ed-direccion" placeholder="Dirección de la empresa">'+esc(empresa.direccion||'')+'</textarea></div>' +
+      '<div class="field"><label for="ed-telefono">Teléfono</label><input id="ed-telefono" value="'+esc(empresa.telefono||'')+'" placeholder="Ej. 7952-0000"/></div>' +
+      '<div class="divider-label">Usuarios con acceso</div>' +
       (miembros.length === 0 ? '<div class="empty-state">Sin usuarios en el equipo todavía</div>' :
         miembros.map(function(m){
           var tiene = (m.empresasAcceso||[]).indexOf(empresa.id) > -1;
@@ -1697,6 +2097,28 @@ function buildDbShim(fsDb){
       '<button class="btn btn-primary btn-block" id="ed-submit" style="margin-top:14px;">Guardar cambios</button>' +
       '<button class="btn btn-danger btn-block" id="ed-delete" style="margin-top:8px;">Eliminar empresa</button>';
     openSheet(esc(empresa.nombre), body, function(root){
+      var nuevoLogoDataUrl = null;
+      root.querySelector('#ed-logo-file').addEventListener('change', function(e){
+        var file = e.target.files[0];
+        if(!file) return;
+        var img = new Image();
+        var reader = new FileReader();
+        reader.onload = function(ev){
+          img.onload = function(){
+            var maxSide = 240;
+            var w = img.width, h = img.height;
+            var scale = Math.min(1, maxSide / Math.max(w,h));
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.round(w*scale); canvas.height = Math.round(h*scale);
+            var c2d = canvas.getContext('2d');
+            c2d.drawImage(img, 0, 0, canvas.width, canvas.height);
+            nuevoLogoDataUrl = canvas.toDataURL('image/png');
+            root.querySelector('#ed-logo-preview').innerHTML = '<img src="'+nuevoLogoDataUrl+'" style="width:100%;height:100%;object-fit:contain;"/>';
+          };
+          img.src = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
       root.querySelector('#ed-delete').addEventListener('click', async function(){
         var nEmpleados = state.empleados.filter(function(e){ return e.empresaId === empresa.id; }).length;
         var msg = nEmpleados > 0
@@ -1712,7 +2134,14 @@ function buildDbShim(fsDb){
         var nombre = root.querySelector('#ed-nombre').value.trim();
         if(!nombre){ toast('El nombre es obligatorio', true); return; }
         try{
-          await state.db.collection('empresas').doc(empresa.id).update({ nombre: nombre });
+          var datosEmpresa = {
+            nombre: nombre,
+            ciudad: root.querySelector('#ed-ciudad').value.trim(),
+            direccion: root.querySelector('#ed-direccion').value.trim(),
+            telefono: root.querySelector('#ed-telefono').value.trim()
+          };
+          if(nuevoLogoDataUrl) datosEmpresa.logoDataUrl = nuevoLogoDataUrl;
+          await state.db.collection('empresas').doc(empresa.id).update(datosEmpresa);
           var checks = root.querySelectorAll('.acc-cb');
           for(var i=0;i<checks.length;i++){
             var cb = checks[i];
@@ -1807,6 +2236,7 @@ function buildDbShim(fsDb){
   });
   document.getElementById('fab-btn').addEventListener('click', function(){
     if(state.tab === 'comisiones') openComisionForm(null);
+    else if(state.tab === 'documentos') openDocumentoTipoPicker(null);
     else openPagoForm();
   });
   document.getElementById('who-btn').addEventListener('click', function(){
