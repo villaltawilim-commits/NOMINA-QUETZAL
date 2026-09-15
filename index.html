@@ -1988,20 +1988,58 @@ function buildDbShim(fsDb){
   function openDocumentoDetail(d){
     var meta = TIPOS_DOCUMENTO[d.tipo] || { nombre: d.tipo };
     var body =
-      '<div id="print-area">' + d.contenidoHtml + '</div>' +
-      '<div class="no-print" style="margin-top:24px;">' +
+      '<div>' + d.contenidoHtml + '</div>' +
+      '<div style="margin-top:24px;">' +
         '<div class="breakdown-row" style="padding:0 2px;"><span>Generado por</span><span>'+esc(d.generadoPor||'—')+'</span></div>' +
-        '<button class="btn btn-primary btn-block" id="doc-imprimir" style="margin-top:14px;">Imprimir / Guardar como PDF</button>' +
+        '<button class="btn btn-primary btn-block" id="doc-descargar" style="margin-top:14px;">Descargar documento</button>' +
+        '<p class="hint">Se descarga como archivo HTML. Ábrelo en tu navegador y usa Cmd/Ctrl+P para imprimirlo o guardarlo como PDF.</p>' +
         '<button class="btn btn-danger btn-block" id="doc-eliminar" style="margin-top:8px;">Eliminar documento</button>' +
       '</div>';
     openSheet(meta.nombre, body, function(root){
-      root.querySelector('#doc-imprimir').addEventListener('click', function(){ window.print(); });
+      root.querySelector('#doc-descargar').addEventListener('click', function(){ descargarDocumentoHtml(d, meta); });
       root.querySelector('#doc-eliminar').addEventListener('click', async function(){
         if(!confirm('¿Eliminar este documento? Esta acción no se puede deshacer.')) return;
         try{ await state.db.collection('documentos').doc(d.id).delete(); toast('Documento eliminado'); closeSheet(); }
         catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
       });
     });
+  }
+
+  function descargarDocumentoHtml(d, meta){
+    var titulo = meta.nombre + ' - ' + d.empleadoNombre;
+    var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+      '<title>'+esc(titulo)+'</title>' +
+      '<style>' +
+        'body{font-family:Georgia,"Times New Roman",serif;color:#111;max-width:780px;margin:40px auto;padding:0 24px 60px;line-height:1.65;}' +
+        '.letterhead{display:flex;align-items:center;gap:18px;padding-bottom:16px;margin-bottom:8px;border-bottom:3px solid #1450D8;}' +
+        '.letterhead img{width:68px;height:68px;object-fit:contain;flex-shrink:0;}' +
+        '.letterhead .lh-name{font-weight:700;font-size:1.3rem;}' +
+        '.letterhead .lh-detail{font-size:.85rem;color:#555;margin-top:3px;line-height:1.5;}' +
+        '.letterhead-rule{height:1px;background:#111;opacity:.15;margin-bottom:24px;}' +
+        'h3{text-align:center;letter-spacing:.04em;margin:0 0 18px;font-size:1.05rem;}' +
+        'p{margin:0 0 12px;}' +
+        '.doc-signature{margin-top:56px;display:flex;gap:24px;flex-wrap:wrap;}' +
+        '.sig-block{flex:1;min-width:170px;text-align:center;font-size:.92rem;}' +
+        '.sig-line{border-top:1px solid #111;margin-bottom:6px;padding-top:6px;}' +
+        '.doc-table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92rem;}' +
+        '.doc-table td{padding:6px 4px;border-bottom:1px solid #ccc;}' +
+        '.doc-table td:last-child{text-align:right;font-family:"Courier New",monospace;}' +
+        '.doc-table tr.total td{font-weight:700;border-top:2px solid #111;border-bottom:none;}' +
+        '.doc-footer{margin-top:60px;padding-top:10px;border-top:1px solid #bbb;text-align:center;font-size:.78rem;color:#555;}' +
+        '@media print{ body{margin:0;padding:28px 28px 60px;} }' +
+      '</style></head><body>' +
+      d.contenidoHtml +
+      '</body></html>';
+    var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = titulo.replace(/[^a-zA-Z0-9 _-]/g, '') + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
   }
 
   /* ============================ EQUIPO ============================ */
