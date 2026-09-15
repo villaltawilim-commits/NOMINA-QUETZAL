@@ -1966,7 +1966,11 @@ function buildDbShim(fsDb){
           datos = { fechaEgreso: fechaEgr2, conceptos: conceptos.map(function(c){return {concepto:c[0],monto:c[1]};}), total: total };
         }
 
-        contenido += buildFooterHtml();
+        var marcadorFirma = '<div class="doc-signature">';
+        var idxFirma = contenido.indexOf(marcadorFirma);
+        var cuerpoContenido = idxFirma > -1 ? contenido.slice(0, idxFirma) : contenido;
+        var firmaContenido = idxFirma > -1 ? contenido.slice(idxFirma) : '';
+        contenido = '<div class="pdf-top">'+cuerpoContenido+'</div><div class="pdf-bottom">'+firmaContenido+buildFooterHtml()+'</div>';
         datos.responsable = responsable;
         datos.puestoResponsable = puestoResponsable;
         try{
@@ -2012,7 +2016,8 @@ function buildDbShim(fsDb){
     var titulo = meta.nombre + ' - ' + d.empleadoNombre;
     var estilos =
       '*{ box-sizing:border-box; }' +
-      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; padding:2.5cm; }' +
+      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; min-height:11in; padding:2.5cm; display:flex; flex-direction:column; justify-content:space-between; }' +
+      '.pdf-page .pdf-top, .pdf-page .pdf-bottom{ width:100%; }' +
       '.pdf-page .letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid #1450D8; }' +
       '.pdf-page .letterhead img{ width:70px; height:70px; object-fit:contain; flex-shrink:0; }' +
       '.pdf-page .letterhead .lh-name{ font-weight:700; font-size:1.35rem; letter-spacing:.01em; }' +
