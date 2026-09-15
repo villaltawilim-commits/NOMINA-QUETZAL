@@ -258,9 +258,9 @@
   .letterhead .lh-detail{ font-size:.78rem; color:var(--ink-muted); line-height:1.55; margin-top:3px; }
   .letterhead-rule{ height:1px; background:var(--ink); opacity:.15; margin-bottom:24px; }
   .doc-body{ font-size:.92rem; line-height:1.65; color:var(--ink); }
-  .doc-body p{ margin:0 0 12px; text-align:center; }
+  .doc-body p{ margin:0 0 12px; text-align:justify; line-height:1.4; }
   .doc-body h3{ text-align:center; font-size:1rem; letter-spacing:.04em; margin:0 0 18px; }
-  .doc-signature{ margin-top:52px; display:flex; gap:24px; flex-wrap:wrap; }
+  .doc-signature{ margin-top:32px; display:flex; gap:24px; flex-wrap:wrap; }
   .doc-signature .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.86rem; }
   .doc-signature .sig-line{ border-top:1px solid var(--ink); margin-bottom:6px; padding-top:6px; }
   .doc-table{ width:100%; border-collapse:collapse; margin:14px 0; font-size:.88rem; }
@@ -1966,11 +1966,7 @@ function buildDbShim(fsDb){
           datos = { fechaEgreso: fechaEgr2, conceptos: conceptos.map(function(c){return {concepto:c[0],monto:c[1]};}), total: total };
         }
 
-        var marcadorFirma = '<div class="doc-signature">';
-        var idxFirma = contenido.indexOf(marcadorFirma);
-        var cuerpoContenido = idxFirma > -1 ? contenido.slice(0, idxFirma) : contenido;
-        var firmaContenido = idxFirma > -1 ? contenido.slice(idxFirma) : '';
-        contenido = '<div class="pdf-top">'+cuerpoContenido+'</div><div class="pdf-bottom">'+firmaContenido+buildFooterHtml()+'</div>';
+        contenido += buildFooterHtml();
         datos.responsable = responsable;
         datos.puestoResponsable = puestoResponsable;
         try{
@@ -2016,40 +2012,32 @@ function buildDbShim(fsDb){
     var titulo = meta.nombre + ' - ' + d.empleadoNombre;
     var estilos =
       '*{ box-sizing:border-box; }' +
-      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; min-height:11in; padding:1in; }' +
+      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; padding:2.5cm; }' +
       '.pdf-page .letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid #1450D8; }' +
       '.pdf-page .letterhead img{ width:70px; height:70px; object-fit:contain; flex-shrink:0; }' +
       '.pdf-page .letterhead .lh-name{ font-weight:700; font-size:1.35rem; letter-spacing:.01em; }' +
-      '.pdf-page .letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.55; }' +
-      '.pdf-page .letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:30px; }' +
-      '.pdf-page h3{ text-align:center; letter-spacing:.06em; margin:0 0 26px; font-size:1.05rem; }' +
-      '.pdf-page p{ margin:0 0 15px; line-height:1.85; text-align:center; font-size:.98rem; }' +
+      '.pdf-page .letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.4; }' +
+      '.pdf-page .letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:26px; }' +
+      '.pdf-page h3{ text-align:center; letter-spacing:.06em; margin:0 0 22px; font-size:1.05rem; }' +
+      '.pdf-page p{ margin:0 0 14px; line-height:1.4; text-align:justify; font-size:.98rem; }' +
       '.pdf-page strong{ font-weight:700; }' +
-      '.pdf-page .doc-signature{ margin-top:64px; display:flex; gap:32px; flex-wrap:wrap; page-break-inside:avoid; }' +
-      '.pdf-page .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.5; }' +
+      '.pdf-page .doc-signature{ margin-top:40px; display:flex; gap:32px; flex-wrap:wrap; }' +
+      '.pdf-page .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.4; }' +
       '.pdf-page .sig-line{ border-top:1px solid #111; margin-bottom:8px; padding-top:8px; }' +
-      '.pdf-page .doc-table{ width:100%; border-collapse:collapse; margin:18px 0; font-size:.94rem; }' +
-      '.pdf-page .doc-table td{ padding:8px 4px; border-bottom:1px solid #ccc; }' +
+      '.pdf-page .doc-table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:.94rem; }' +
+      '.pdf-page .doc-table td{ padding:7px 4px; border-bottom:1px solid #ccc; }' +
       '.pdf-page .doc-table td:last-child{ text-align:right; font-family:"Courier New",monospace; }' +
-      '.pdf-page .doc-table tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:10px; }' +
-      '.pdf-page .doc-footer{ margin-top:70px; padding-top:12px; border-top:1px solid #bbb; text-align:center; font-size:.78rem; color:#555; letter-spacing:.01em; }';
+      '.pdf-page .doc-table tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:9px; }' +
+      '.pdf-page .doc-footer{ margin-top:40px; padding-top:12px; border-top:1px solid #bbb; text-align:center; font-size:.78rem; color:#555; letter-spacing:.01em; }';
 
     var contenedor = document.createElement('div');
     contenedor.style.position = 'fixed';
     contenedor.style.left = '-10000px';
     contenedor.style.top = '0';
+    contenedor.style.width = '8.5in';
     contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + d.contenidoHtml + '</div>';
     document.body.appendChild(contenedor);
     var elPagina = contenedor.querySelector('.pdf-page');
-
-    var elTop = elPagina.querySelector('.pdf-top');
-    var elBottom = elPagina.querySelector('.pdf-bottom');
-    if(elTop && elBottom){
-      var pageHeightPx = 11 * 96;
-      var paddingVerticalPx = 2 * 96;
-      var espacioDisponible = pageHeightPx - paddingVerticalPx - elTop.offsetHeight - elBottom.offsetHeight;
-      if(espacioDisponible > 0){ elBottom.style.marginTop = espacioDisponible + 'px'; }
-    }
 
     toast('Generando PDF…');
     html2pdf().set({
@@ -2058,7 +2046,7 @@ function buildDbShim(fsDb){
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+      pagebreak: { mode: ['css', 'legacy'] }
     }).from(elPagina).save().then(function(){
       document.body.removeChild(contenedor);
       toast('PDF descargado, listo para firmar');
