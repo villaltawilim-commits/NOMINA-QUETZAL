@@ -350,6 +350,7 @@
   <div class="toast-root" id="toast-root"></div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
@@ -1991,8 +1992,8 @@ function buildDbShim(fsDb){
       '<div>' + d.contenidoHtml + '</div>' +
       '<div style="margin-top:24px;">' +
         '<div class="breakdown-row" style="padding:0 2px;"><span>Generado por</span><span>'+esc(d.generadoPor||'—')+'</span></div>' +
-        '<button class="btn btn-primary btn-block" id="doc-descargar" style="margin-top:14px;">Descargar documento</button>' +
-        '<p class="hint">Se descarga como archivo HTML. Ábrelo en tu navegador y usa Cmd/Ctrl+P para imprimirlo o guardarlo como PDF.</p>' +
+        '<button class="btn btn-primary btn-block" id="doc-descargar" style="margin-top:14px;">Descargar PDF</button>' +
+        '<p class="hint">Se descarga listo en tamaño carta, para imprimir y firmar.</p>' +
         '<button class="btn btn-danger btn-block" id="doc-eliminar" style="margin-top:8px;">Eliminar documento</button>' +
       '</div>';
     openSheet(meta.nombre, body, function(root){
@@ -2006,49 +2007,51 @@ function buildDbShim(fsDb){
   }
 
   function descargarDocumentoHtml(d, meta){
+    if(!window.html2pdf){ toast('No se pudo cargar el generador de PDF, revisa tu conexión e intenta de nuevo', true); return; }
     var titulo = meta.nombre + ' - ' + d.empleadoNombre;
-    var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
-      '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
-      '<title>'+esc(titulo)+'</title>' +
-      '<style>' +
-        '@page{ size: letter; margin: 1in; }' +
-        '*{ box-sizing:border-box; }' +
-        'html{ background:#d8dade; }' +
-        'body{ font-family:Georgia,"Times New Roman",serif; color:#161616; margin:0; padding:32px 16px; }' +
-        '.page{ background:#fff; width:8.5in; min-height:11in; margin:0 auto; padding:1in; box-shadow:0 3px 18px rgba(0,0,0,.22); }' +
-        '.letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid #1450D8; }' +
-        '.letterhead img{ width:70px; height:70px; object-fit:contain; flex-shrink:0; }' +
-        '.letterhead .lh-name{ font-weight:700; font-size:1.35rem; letter-spacing:.01em; }' +
-        '.letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.55; }' +
-        '.letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:30px; }' +
-        'h3{ text-align:center; letter-spacing:.06em; margin:0 0 26px; font-size:1.05rem; }' +
-        'p{ margin:0 0 15px; line-height:1.85; text-align:justify; font-size:.98rem; }' +
-        'strong{ font-weight:700; }' +
-        '.doc-signature{ margin-top:64px; display:flex; gap:32px; flex-wrap:wrap; }' +
-        '.sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.5; }' +
-        '.sig-line{ border-top:1px solid #111; margin-bottom:8px; padding-top:8px; }' +
-        '.doc-table{ width:100%; border-collapse:collapse; margin:18px 0; font-size:.94rem; }' +
-        '.doc-table td{ padding:8px 4px; border-bottom:1px solid #ccc; }' +
-        '.doc-table td:last-child{ text-align:right; font-family:"Courier New",monospace; }' +
-        '.doc-table tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:10px; }' +
-        '.doc-footer{ margin-top:70px; padding-top:12px; border-top:1px solid #bbb; text-align:center; font-size:.78rem; color:#555; letter-spacing:.01em; }' +
-        '@media print{' +
-          'html{ background:#fff; }' +
-          'body{ margin:0; padding:0; }' +
-          '.page{ box-shadow:none; width:auto; min-height:auto; margin:0; padding:0; }' +
-        '}' +
-      '</style></head><body>' +
-      '<div class="page">' + d.contenidoHtml + '</div>' +
-      '</body></html>';
-    var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = titulo.replace(/[^a-zA-Z0-9 _-]/g, '') + '.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    var estilos =
+      '*{ box-sizing:border-box; }' +
+      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; padding:1in; }' +
+      '.pdf-page .letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid #1450D8; }' +
+      '.pdf-page .letterhead img{ width:70px; height:70px; object-fit:contain; flex-shrink:0; }' +
+      '.pdf-page .letterhead .lh-name{ font-weight:700; font-size:1.35rem; letter-spacing:.01em; }' +
+      '.pdf-page .letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.55; }' +
+      '.pdf-page .letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:30px; }' +
+      '.pdf-page h3{ text-align:center; letter-spacing:.06em; margin:0 0 26px; font-size:1.05rem; }' +
+      '.pdf-page p{ margin:0 0 15px; line-height:1.85; text-align:justify; font-size:.98rem; }' +
+      '.pdf-page strong{ font-weight:700; }' +
+      '.pdf-page .doc-signature{ margin-top:64px; display:flex; gap:32px; flex-wrap:wrap; page-break-inside:avoid; }' +
+      '.pdf-page .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.5; }' +
+      '.pdf-page .sig-line{ border-top:1px solid #111; margin-bottom:8px; padding-top:8px; }' +
+      '.pdf-page .doc-table{ width:100%; border-collapse:collapse; margin:18px 0; font-size:.94rem; }' +
+      '.pdf-page .doc-table td{ padding:8px 4px; border-bottom:1px solid #ccc; }' +
+      '.pdf-page .doc-table td:last-child{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page .doc-table tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:10px; }' +
+      '.pdf-page .doc-footer{ margin-top:70px; padding-top:12px; border-top:1px solid #bbb; text-align:center; font-size:.78rem; color:#555; letter-spacing:.01em; }';
+
+    var contenedor = document.createElement('div');
+    contenedor.style.position = 'fixed';
+    contenedor.style.left = '-10000px';
+    contenedor.style.top = '0';
+    contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + d.contenidoHtml + '</div>';
+    document.body.appendChild(contenedor);
+    var elPagina = contenedor.querySelector('.pdf-page');
+
+    toast('Generando PDF…');
+    html2pdf().set({
+      margin: 0,
+      filename: titulo.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+    }).from(elPagina).save().then(function(){
+      document.body.removeChild(contenedor);
+      toast('PDF descargado, listo para firmar');
+    }).catch(function(){
+      document.body.removeChild(contenedor);
+      toast('No se pudo generar el PDF', true);
+    });
   }
 
   /* ============================ EQUIPO ============================ */
