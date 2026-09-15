@@ -258,7 +258,7 @@
   .letterhead .lh-detail{ font-size:.78rem; color:var(--ink-muted); line-height:1.55; margin-top:3px; }
   .letterhead-rule{ height:1px; background:var(--ink); opacity:.15; margin-bottom:24px; }
   .doc-body{ font-size:.92rem; line-height:1.65; color:var(--ink); }
-  .doc-body p{ margin:0 0 12px; }
+  .doc-body p{ margin:0 0 12px; text-align:center; }
   .doc-body h3{ text-align:center; font-size:1rem; letter-spacing:.04em; margin:0 0 18px; }
   .doc-signature{ margin-top:52px; display:flex; gap:24px; flex-wrap:wrap; }
   .doc-signature .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.86rem; }
@@ -1850,6 +1850,7 @@ function buildDbShim(fsDb){
         var responsable = root.querySelector('#d-responsable').value.trim();
         var puestoResponsable = root.querySelector('#d-puesto-responsable').value.trim();
         if(!responsable){ toast('Escribe el nombre del responsable de emitir el documento', true); return; }
+        if(!puestoResponsable){ toast('Escribe el puesto del responsable de emitir el documento', true); return; }
         var datos = {};
         var contenido = '';
         var lh = buildLetterheadHtml();
@@ -2018,7 +2019,7 @@ function buildDbShim(fsDb){
       '.pdf-page .letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.55; }' +
       '.pdf-page .letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:30px; }' +
       '.pdf-page h3{ text-align:center; letter-spacing:.06em; margin:0 0 26px; font-size:1.05rem; }' +
-      '.pdf-page p{ margin:0 0 15px; line-height:1.85; text-align:justify; font-size:.98rem; }' +
+      '.pdf-page p{ margin:0 0 15px; line-height:1.85; text-align:center; font-size:.98rem; }' +
       '.pdf-page strong{ font-weight:700; }' +
       '.pdf-page .doc-signature{ margin-top:64px; display:flex; gap:32px; flex-wrap:wrap; page-break-inside:avoid; }' +
       '.pdf-page .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.5; }' +
