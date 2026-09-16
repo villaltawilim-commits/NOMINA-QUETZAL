@@ -712,6 +712,30 @@ function buildDbShim(fsDb){
       return { nombre: e.nombre, dia: d.getDate(), empresaNombre: empresa ? empresa.nombre : '' };
     }).sort(function(a,b){ return a.dia - b.dia; });
   }
+  // El periodo activo de "Pagar sueldos" siempre se calcula con la fecha de hoy (ver openPagarSueldos),
+  // así que se "reinicia" solo cada quincena/mes sin necesidad de guardar ningún estado.
+  // Esta función revisa si la quincena que ACABA DE CERRAR se quedó con sueldos sin pagar.
+  function sueldosPendientesPeriodoAnterior(){
+    var hoy = new Date();
+    var dia = hoy.getDate();
+    var periodoCerrado, fechaRefDate;
+    if(dia >= 16){
+      periodoCerrado = 'quincena1';
+      fechaRefDate = new Date(hoy.getFullYear(), hoy.getMonth(), 15);
+    } else {
+      periodoCerrado = 'quincena2';
+      fechaRefDate = new Date(hoy.getFullYear(), hoy.getMonth(), 0); // día 0 = último día del mes anterior
+    }
+    var fechaRefISO = fechaRefDate.getFullYear()+'-'+String(fechaRefDate.getMonth()+1).padStart(2,'0')+'-'+String(fechaRefDate.getDate()).padStart(2,'0');
+    var etiqueta = periodoEtiqueta(fechaRefISO, periodoCerrado);
+    var activos = state.empleados.filter(function(e){
+      return e.activo !== false && e.empresaId === state.empresaActualId && (!e.fechaIngreso || e.fechaIngreso <= fechaRefISO);
+    });
+    var pendientes = activos.filter(function(e){
+      return !state.pagos.some(function(p){ return p.empleadoId === e.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+    });
+    return { etiqueta: etiqueta, periodo: periodoCerrado, fecha: fechaRefISO, empleados: pendientes };
+  }
   function periodoEtiqueta(fechaISO, periodoTipo){
     var d = new Date(fechaISO + "T00:00:00");
     var mes = MESES[d.getMonth()] || "";
@@ -1148,9 +1172,15 @@ function buildDbShim(fsDb){
     var proy = computeProyeccionMes();
     var cumples = cumpleanosDelMes();
     var mostrarEmpresaEnCumples = empresasAccesibles().length > 1;
+    var pendientesAnterior = sueldosPendientesPeriodoAnterior();
 
     el.innerHTML =
       '<div class="view-head"><h1>Resumen</h1><p>'+esc(MESES[new Date().getMonth()])+' '+new Date().getFullYear()+'</p></div>' +
+      (pendientesAnterior.empleados.length ?
+        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesAnterior.empleados.length+' sueldo(s) sin pagar de '+esc(pendientesAnterior.etiqueta)+': ' +
+          pendientesAnterior.empleados.map(function(e){ return esc(e.nombre); }).join(', ') +
+        '<button class="btn btn-danger btn-block" id="qa-pagar-pendiente" style="margin-top:8px;">Pagar ahora</button></div>'
+        : '') +
       (cumples.length ?
         '<div class="birthday-card"><div class="bc-title">🎂 Cumpleaños este mes</div>' +
           cumples.map(function(c){
@@ -1178,6 +1208,8 @@ function buildDbShim(fsDb){
       '<div id="recientes-wrap"></div>';
 
     document.getElementById('qa-pagar-sueldos').addEventListener('click', openPagarSueldos);
+    var pagarPendienteBtn = document.getElementById('qa-pagar-pendiente');
+    if(pagarPendienteBtn) pagarPendienteBtn.addEventListener('click', function(){ openPagarSueldos(pendientesAnterior.periodo, pendientesAnterior.fecha); });
     document.getElementById('qa-pago').addEventListener('click', openPagoForm);
     document.getElementById('qa-empleado').addEventListener('click', function(){ openEmpleadoForm(null); });
     document.getElementById('ver-todos-pagos').addEventListener('click', function(){ state.tab='nomina'; render(); });
@@ -1800,8 +1832,8 @@ function buildDbShim(fsDb){
   }
 
   /* ============================ PAGAR SUELDOS ============================ */
-  function openPagarSueldos(){
-    var ctx = { periodo: 'quincena1', fecha: todayISO(), cleanupSig: null };
+  function openPagarSueldos(periodoInicial, fechaInicial){
+    var ctx = { periodo: periodoInicial || 'quincena1', fecha: fechaInicial || todayISO(), cleanupSig: null };
 
     openSheet('Pagar sueldos', '<div id="ps-content"></div>', function(root){
       var content = root.querySelector('#ps-content');
