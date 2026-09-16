@@ -678,6 +678,29 @@ function buildDbShim(fsDb){
     if(l.frecuencia === 'mensual') return 'Cada mes';
     return 'Cada 15 días';
   }
+  // Ventana emergente que resalta cuando un empleado tiene préstamo/descuento activo antes de pagarle,
+  // dejando fijar el monto de cada descuento ahí mismo. Si no tiene ninguno, continúa directo.
+  function mostrarAlertaPrestamos(emp, periodo, onContinuar){
+    var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
+    var aplican = loans.filter(function(l){ return montoCuotaParaPeriodo(l, periodo) > 0; });
+    if(aplican.length === 0){ onContinuar({}); return; }
+    var body =
+      '<div class="banner" style="font-weight:700;font-size:.92rem;">⚠️ '+esc(emp.nombre)+' tiene préstamo/descuento activo</div>' +
+      aplican.map(function(l){
+        var sugerido = round2(Math.min(montoCuotaParaPeriodo(l, periodo), l.saldoPendiente));
+        return '<div class="field"><label>Descuento por: '+esc(l.concepto)+' <span style="font-weight:400;color:var(--ink-faint);">(saldo '+fmtQ(l.saldoPendiente)+')</span></label>' +
+          '<input type="number" class="alerta-loan-input" data-loan="'+l.id+'" value="'+sugerido+'" min="0" step="0.01"/></div>';
+      }).join('') +
+      '<button class="btn btn-primary btn-block" id="alerta-continuar" style="margin-top:10px;">Continuar al pago</button>';
+    openSheet('Préstamo / descuento pendiente', body, function(root){
+      root.querySelector('#alerta-continuar').addEventListener('click', function(){
+        var overrides = {};
+        root.querySelectorAll('.alerta-loan-input').forEach(function(inp){ overrides[inp.dataset.loan] = Number(inp.value)||0; });
+        closeSheet();
+        setTimeout(function(){ onContinuar(overrides); }, 230);
+      });
+    });
+  }
   function computeProyeccionMes(){
     var activos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
     var hoy = todayISO();
@@ -1856,7 +1879,8 @@ function buildDbShim(fsDb){
         content.querySelectorAll('.pagar-btn').forEach(function(btn){
           btn.addEventListener('click', function(){
             var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
-            if(emp) renderSignature(emp);
+            if(!emp) return;
+            mostrarAlertaPrestamos(emp, ctx.periodo, function(overrides){ renderSignature(emp, overrides); });
           });
         });
         content.querySelectorAll('.ver-firma-btn').forEach(function(btn){
@@ -1868,7 +1892,8 @@ function buildDbShim(fsDb){
         });
       }
 
-      function renderSignature(emp){
+      function renderSignature(emp, overrides){
+        overrides = overrides || {};
         var info = computeFor(emp);
         var b = info.b;
         content.innerHTML =
@@ -1880,8 +1905,9 @@ function buildDbShim(fsDb){
             (info.igssOn? row('IGSS ('+fmtPct(getIgssRate())+')', -b.igss) : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
             (info.isrOn? row('ISR estimado', -b.isr) : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
             info.loanApplied.map(function(l){
+              var valorInicial = overrides[l.prestamoId] != null ? overrides[l.prestamoId] : l.monto;
               return '<div class="breakdown-row"><span>Descuento por: '+esc(l.concepto)+'</span>' +
-                '<span style="display:flex;align-items:center;gap:4px;">-Q <input type="number" class="loan-amt-input-firma" data-loan="'+l.prestamoId+'" value="'+l.monto+'" step="0.01" min="0" style="width:80px;text-align:right;border:1px solid var(--border);border-radius:8px;padding:4px 6px;"/></span></div>';
+                '<span style="display:flex;align-items:center;gap:4px;">-Q <input type="number" class="loan-amt-input-firma" data-loan="'+l.prestamoId+'" value="'+valorInicial+'" step="0.01" min="0" style="width:80px;text-align:right;border:1px solid var(--border);border-radius:8px;padding:4px 6px;"/></span></div>';
             }).join('') +
             '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt" id="ps-total-neto">'+fmtQ(b.totalNeto)+'</span></div>' +
           '</div>' +
@@ -1905,6 +1931,7 @@ function buildDbShim(fsDb){
           content.querySelector('#ps-total-neto').textContent = fmtQ(totalNuevo);
         }
         content.querySelectorAll('.loan-amt-input-firma').forEach(function(inp){ inp.addEventListener('input', recalcTotal); });
+        recalcTotal();
 
         var canvas = content.querySelector('#firma-canvas');
         var c2d = canvas.getContext('2d');
