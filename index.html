@@ -367,7 +367,8 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail,
+  EmailAuthProvider, reauthenticateWithCredential
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
@@ -438,6 +439,36 @@ function buildDbShim(fsDb){
     var out = '';
     for(var i=0;i<8;i++) out += chars[Math.floor(Math.random()*chars.length)];
     return out;
+  }
+
+  // Reautenticación para acciones sensibles (activar/desactivar licencias): se guarda solo en
+  // memoria (nunca en localStorage), así que se pierde al cerrar o recargar la página, y además
+  // expira sola a los 15 minutos de inactividad en estas acciones.
+  var LICENCIA_AUTH_TTL_MS = 15 * 60 * 1000;
+  var licenciaAuthAt = 0;
+  function requireLicenciaAuth(onOk){
+    if(Date.now() - licenciaAuthAt < LICENCIA_AUTH_TTL_MS){
+      licenciaAuthAt = Date.now();
+      onOk();
+      return;
+    }
+    var body =
+      '<div class="field"><label for="reauth-pass">Contraseña</label><input id="reauth-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>' +
+      '<p class="disclaimer">Por seguridad, confirma tu contraseña para activar o desactivar una licencia. Se te volverá a pedir después de 15 minutos sin usar esta sección, o si cierras la aplicación.</p>' +
+      '<button class="btn btn-primary btn-block" id="reauth-submit">Confirmar</button>';
+    openSheet('Confirma tu identidad', body, function(root){
+      root.querySelector('#reauth-submit').addEventListener('click', async function(){
+        var pass = root.querySelector('#reauth-pass').value;
+        if(!pass){ toast('Escribe tu contraseña', true); return; }
+        try{
+          var cred = EmailAuthProvider.credential(state.authUser.email, pass);
+          await reauthenticateWithCredential(auth.currentUser, cred);
+          licenciaAuthAt = Date.now();
+          closeSheet();
+          onOk();
+        }catch(e){ toast('Contraseña incorrecta', true); }
+      });
+    });
   }
 
   function round2(n){ return Math.round((Number(n)||0) * 100) / 100; }
@@ -2495,19 +2526,21 @@ function buildDbShim(fsDb){
       '<p class="disclaimer">Este panel solo controla la licencia (vencimiento y precio); no da acceso a los empleados, pagos ni documentos de esta empresa.</p>' +
       '<button class="btn btn-primary btn-block" id="lic-submit" style="margin-top:6px;">Guardar</button>';
     openSheet(esc(empresa.nombre), body, function(root){
-      root.querySelector('#lic-submit').addEventListener('click', async function(){
+      root.querySelector('#lic-submit').addEventListener('click', function(){
         var activa = root.querySelector('input[name=lic-estado]:checked').value === 'activa';
         var fechaVencimiento = root.querySelector('#lic-vence').value;
         var precioVenta = root.querySelector('#lic-precio').value;
         var notas = root.querySelector('#lic-notas').value.trim();
-        try{
-          await state.db.collection('licencias').doc(empresa.id).set({
-            activa: activa, fechaVencimiento: fechaVencimiento || null,
-            precioVenta: precioVenta === '' ? null : round2(precioVenta), notas: notas,
-            actualizadoEn: new Date().toISOString(), actualizadoPor: state.session.nombre
-          }, { merge: true });
-          toast('Licencia actualizada'); closeSheet();
-        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+        requireLicenciaAuth(async function(){
+          try{
+            await state.db.collection('licencias').doc(empresa.id).set({
+              activa: activa, fechaVencimiento: fechaVencimiento || null,
+              precioVenta: precioVenta === '' ? null : round2(precioVenta), notas: notas,
+              actualizadoEn: new Date().toISOString(), actualizadoPor: state.session.nombre
+            }, { merge: true });
+            toast('Licencia actualizada'); closeSheet();
+          }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+        });
       });
     });
   }
