@@ -686,6 +686,7 @@ function buildDbShim(fsDb){
     empleadosMultiEmpresa: [], // empleados de TODAS las empresas accesibles (solo para cumpleaños y conteos entre empresas)
     todasEmpresasAdmin: [],
     todasLicenciasAdmin: [],
+    codigosEmpresaAdmin: [],
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
   };
@@ -760,6 +761,11 @@ function buildDbShim(fsDb){
         state.todasLicenciasAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, function(err){ toast('No se pudo sincronizar licencias (admin): ' + err.code, true); }));
+
+      unsubscribes.push(db.collection('codigosEmpresa').onSnapshot(function(snap){
+        state.codigosEmpresaAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(err){ toast('No se pudo sincronizar códigos de empresa (admin): ' + err.code, true); }));
     }
   }
 
@@ -1012,7 +1018,7 @@ function buildDbShim(fsDb){
       state.miEquipoDoc = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
-      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = [];
+      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = [];
       showLoginScreen();
     }
   });
@@ -2307,17 +2313,24 @@ function buildDbShim(fsDb){
   function openEmpresaForm(){
     var body =
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
-      '<p class="disclaimer">Se creará con sus propios empleados, pagos y comisiones, separados de las demás empresas. Después de crearla, dale acceso a los usuarios que la deban ver desde su ficha.</p>' +
+      '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
+      '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema — contáctalo ('+esc(CONTACTO_SOPORTE)+') para obtenerlo.</p>' +
       '<button class="btn btn-primary btn-block" id="em-submit" style="margin-top:6px;">Crear empresa</button>';
     openSheet('Nueva empresa', body, function(root){
       root.querySelector('#em-submit').addEventListener('click', async function(){
         var nombre = root.querySelector('#em-nombre').value.trim();
+        var codigo = root.querySelector('#em-codigo').value.trim().toUpperCase();
         if(!nombre){ toast('Escribe el nombre de la empresa', true); return; }
+        if(!codigo){ toast('Escribe el código de autorización', true); return; }
         try{
+          var codSnap = await state.db.collection('codigosEmpresa').doc(codigo).get();
+          if(!codSnap.exists){ toast('Código inválido', true); return; }
+          if(codSnap.data().usado){ toast('Este código ya fue usado', true); return; }
           var ref = await state.db.collection('empresas').add({ nombre: nombre, creadaPor: state.session.nombre, creadaEn: new Date().toISOString() });
           var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
           var acc = (miembro && miembro.empresasAcceso) || [];
           await state.db.collection('equipo').doc(state.session.id).update({ empresasAcceso: acc.concat([ref.id]) });
+          await state.db.collection('codigosEmpresa').doc(codigo).update({ usado: true, usadoPor: state.session.nombre, usadoEn: new Date().toISOString() });
           state.empresaActualId = ref.id;
           toast('Empresa creada'); closeSheet();
         }catch(e){ toast('No se pudo crear: '+(e.code||''), true); }
@@ -2423,26 +2436,51 @@ function buildDbShim(fsDb){
     var licPorId = {};
     state.todasLicenciasAdmin.forEach(function(l){ licPorId[l.id] = l; });
     var hoy = todayISO();
+    var codigosPendientes = state.codigosEmpresaAdmin.filter(function(c){ return !c.usado; });
     el.innerHTML =
       '<div class="view-head"><h1>Licencias</h1><p>Activa o pausa el acceso de cada empresa cliente</p></div>' +
-      '<div class="ledger" id="licencias-wrap"></div>';
+      '<div class="ledger" id="licencias-wrap"></div>' +
+      '<div class="section-title"><h2>Empresas adicionales</h2><button class="link-btn" id="gen-codigo-empresa">+ Generar código</button></div>' +
+      '<p class="hint" style="margin-top:-6px;">Cada cuenta solo puede crear una empresa; comparte uno de estos códigos con un cliente que necesite crear otra.</p>' +
+      (codigosPendientes.length === 0 ? '<div class="empty-state">Sin códigos pendientes</div>' :
+        '<div class="ledger" id="codigos-empresa-wrap">' + codigosPendientes.map(function(c){
+          return '<div class="ledger-row" style="cursor:default;"><span class="status-bar"></span>' +
+            '<span class="row-main"><span class="title" style="font-family:\'Courier New\',monospace;letter-spacing:.05em;">'+esc(c.id)+'</span><span class="sub">Sin usar</span></span>' +
+            '<button class="icon-btn ce-borrar" data-id="'+c.id+'" title="Eliminar código"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
+        }).join('') + '</div>'
+      );
     var wrap = document.getElementById('licencias-wrap');
     if(empresas.length === 0){
       wrap.innerHTML = '<div class="empty-state">Aún no hay empresas registradas</div>';
-      return;
+    } else {
+      wrap.innerHTML = empresas.map(function(em){
+        var lic = licPorId[em.id];
+        var activa = !!(lic && lic.activa === true);
+        var vencida = !!(lic && lic.fechaVencimiento && lic.fechaVencimiento < hoy);
+        var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
+        return '<button class="ledger-row" data-id="'+em.id+'">' +
+          '<span class="status-bar'+(activa && !vencida ? ' good' : '')+'"></span>' +
+          '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+'</span></span>' +
+          '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+        '</button>';
+      }).join('');
+      wireLedgerRows(wrap, empresas, function(em){ openLicenciaDetalle(em, licPorId[em.id]); });
     }
-    wrap.innerHTML = empresas.map(function(em){
-      var lic = licPorId[em.id];
-      var activa = !!(lic && lic.activa === true);
-      var vencida = !!(lic && lic.fechaVencimiento && lic.fechaVencimiento < hoy);
-      var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
-      return '<button class="ledger-row" data-id="'+em.id+'">' +
-        '<span class="status-bar'+(activa && !vencida ? ' good' : '')+'"></span>' +
-        '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+'</span></span>' +
-        '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
-      '</button>';
-    }).join('');
-    wireLedgerRows(wrap, empresas, function(em){ openLicenciaDetalle(em, licPorId[em.id]); });
+
+    document.getElementById('gen-codigo-empresa').addEventListener('click', async function(){
+      var codigo = generarCodigoInvitacion();
+      try{
+        await state.db.collection('codigosEmpresa').doc(codigo).set({ usado: false, creadoEn: new Date().toISOString() });
+        toast('Código generado: ' + codigo);
+      }catch(e){ toast('No se pudo generar: '+(e.code||''), true); }
+    });
+    el.querySelectorAll('.ce-borrar').forEach(function(btn){
+      btn.addEventListener('click', async function(){
+        if(!confirm('¿Eliminar este código?')) return;
+        try{ await state.db.collection('codigosEmpresa').doc(btn.dataset.id).delete(); toast('Código eliminado'); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
   }
 
   function openLicenciaDetalle(empresa, lic){
