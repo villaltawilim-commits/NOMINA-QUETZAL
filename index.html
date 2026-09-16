@@ -678,29 +678,6 @@ function buildDbShim(fsDb){
     if(l.frecuencia === 'mensual') return 'Cada mes';
     return 'Cada 15 días';
   }
-  // Ventana emergente que resalta cuando un empleado tiene préstamo/descuento activo antes de pagarle,
-  // dejando fijar el monto de cada descuento ahí mismo. Si no tiene ninguno, continúa directo.
-  function mostrarAlertaPrestamos(emp, periodo, onContinuar){
-    var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
-    var aplican = loans.filter(function(l){ return montoCuotaParaPeriodo(l, periodo) > 0; });
-    if(aplican.length === 0){ onContinuar({}); return; }
-    var body =
-      '<div class="banner" style="font-weight:700;font-size:.92rem;">⚠️ '+esc(emp.nombre)+' tiene préstamo/descuento activo</div>' +
-      aplican.map(function(l){
-        var sugerido = round2(Math.min(montoCuotaParaPeriodo(l, periodo), l.saldoPendiente));
-        return '<div class="field"><label>Descuento por: '+esc(l.concepto)+' <span style="font-weight:400;color:var(--ink-faint);">(saldo '+fmtQ(l.saldoPendiente)+')</span></label>' +
-          '<input type="number" class="alerta-loan-input" data-loan="'+l.id+'" value="'+sugerido+'" min="0" step="0.01"/></div>';
-      }).join('') +
-      '<button class="btn btn-primary btn-block" id="alerta-continuar" style="margin-top:10px;">Continuar al pago</button>';
-    openSheet('Préstamo / descuento pendiente', body, function(root){
-      root.querySelector('#alerta-continuar').addEventListener('click', function(){
-        var overrides = {};
-        root.querySelectorAll('.alerta-loan-input').forEach(function(inp){ overrides[inp.dataset.loan] = Number(inp.value)||0; });
-        closeSheet();
-        setTimeout(function(){ onContinuar(overrides); }, 230);
-      });
-    });
-  }
   function computeProyeccionMes(){
     var activos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
     var hoy = todayISO();
@@ -1879,8 +1856,7 @@ function buildDbShim(fsDb){
         content.querySelectorAll('.pagar-btn').forEach(function(btn){
           btn.addEventListener('click', function(){
             var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
-            if(!emp) return;
-            mostrarAlertaPrestamos(emp, ctx.periodo, function(overrides){ renderSignature(emp, overrides); });
+            if(emp) renderAlertaPrestamos(emp);
           });
         });
         content.querySelectorAll('.ver-firma-btn').forEach(function(btn){
@@ -1889,6 +1865,27 @@ function buildDbShim(fsDb){
             var info = emp && computeFor(emp);
             if(info && info.pagoExistente){ closeSheet(); setTimeout(function(){ openPagoDetail(info.pagoExistente); }, 230); }
           });
+        });
+      }
+
+      function renderAlertaPrestamos(emp){
+        var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
+        var aplican = loans.filter(function(l){ return montoCuotaParaPeriodo(l, ctx.periodo) > 0; });
+        if(aplican.length === 0){ renderSignature(emp); return; }
+        content.innerHTML =
+          '<button class="btn btn-ghost" id="alerta-volver" style="padding:4px 0;margin-bottom:8px;">‹ Volver a la lista</button>' +
+          '<div class="banner" style="font-weight:700;font-size:.92rem;">⚠️ '+esc(emp.nombre)+' tiene préstamo/descuento activo</div>' +
+          aplican.map(function(l){
+            var sugerido = round2(Math.min(montoCuotaParaPeriodo(l, ctx.periodo), l.saldoPendiente));
+            return '<div class="field"><label>Descuento por: '+esc(l.concepto)+' <span style="font-weight:400;color:var(--ink-faint);">(saldo '+fmtQ(l.saldoPendiente)+')</span></label>' +
+              '<input type="number" class="alerta-loan-input" data-loan="'+l.id+'" value="'+sugerido+'" min="0" step="0.01"/></div>';
+          }).join('') +
+          '<button class="btn btn-primary btn-block" id="alerta-continuar" style="margin-top:10px;">Continuar al pago</button>';
+        content.querySelector('#alerta-volver').addEventListener('click', function(){ renderList(); });
+        content.querySelector('#alerta-continuar').addEventListener('click', function(){
+          var overrides = {};
+          content.querySelectorAll('.alerta-loan-input').forEach(function(inp){ overrides[inp.dataset.loan] = Number(inp.value)||0; });
+          renderSignature(emp, overrides);
         });
       }
 
