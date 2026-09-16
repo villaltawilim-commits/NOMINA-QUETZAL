@@ -657,19 +657,41 @@ function buildDbShim(fsDb){
     if(!total || emp.salarioQuincena1 == null) return 0.5;
     return Math.min(1, Math.max(0, Number(emp.salarioQuincena1)/total));
   }
+  // Monto que corresponde descontar de un préstamo/descuento en un periodo dado ('quincena1'|'quincena2'|'mensual').
+  // 'ambas' permite montos distintos por quincena; 'quincenal' y 'mensual' son valores de datos previos (mismo monto siempre).
+  function montoCuotaParaPeriodo(l, periodo){
+    if(l.frecuencia === 'ambas'){
+      if(periodo === 'quincena1') return Number(l.montoQ1 != null ? l.montoQ1 : l.montoCuota) || 0;
+      if(periodo === 'quincena2') return Number(l.montoQ2 != null ? l.montoQ2 : l.montoCuota) || 0;
+      return 0;
+    }
+    if(l.frecuencia === 'quincena1') return periodo === 'quincena1' ? (Number(l.montoCuota)||0) : 0;
+    if(l.frecuencia === 'quincena2') return periodo === 'quincena2' ? (Number(l.montoCuota)||0) : 0;
+    if(l.frecuencia === 'mensual') return periodo === 'mensual' ? (Number(l.montoCuota)||0) : 0;
+    // 'quincenal' (dato antiguo): se descontaba el mismo monto en ambas quincenas
+    return (periodo === 'quincena1' || periodo === 'quincena2') ? (Number(l.montoCuota)||0) : 0;
+  }
+  function etiquetaFrecuenciaPrestamo(l){
+    if(l.frecuencia === 'ambas') return 'Quincena 1 y quincena 2';
+    if(l.frecuencia === 'quincena1') return 'Solo quincena 1 (día 15)';
+    if(l.frecuencia === 'quincena2') return 'Solo quincena 2 (fin de mes)';
+    if(l.frecuencia === 'mensual') return 'Cada mes';
+    return 'Cada 15 días';
+  }
   function computeProyeccionMes(){
     var activos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
     var hoy = todayISO();
     var totalQ1 = 0, totalQ2 = 0;
     activos.forEach(function(e){
-      var loanQuincenal = state.prestamos.filter(function(l){ return l.empleadoId === e.id && l.estado === 'activo' && l.frecuencia === 'quincenal'; })
-        .reduce(function(s,l){ return s + round2(Math.min(l.montoCuota, l.saldoPendiente)); }, 0);
+      var prestamosActivos = state.prestamos.filter(function(l){ return l.empleadoId === e.id && l.estado === 'activo'; });
+      var loanQ1 = prestamosActivos.reduce(function(s,l){ return s + round2(Math.min(montoCuotaParaPeriodo(l,'quincena1'), l.saldoPendiente)); }, 0);
+      var loanQ2 = prestamosActivos.reduce(function(s,l){ return s + round2(Math.min(montoCuotaParaPeriodo(l,'quincena2'), l.saldoPendiente)); }, 0);
       var igssOn = empIgssActivo(e), isrOn = empIsrActivo(e), f1 = empFraccionQuincena1(e);
       var bono = e.bonificacion != null ? e.bonificacion : DEFAULT_BONIFICACION;
       var diasQ1 = calcularDiasTrabajados(e.fechaIngreso, hoy, 'quincena1');
       var diasQ2 = calcularDiasTrabajados(e.fechaIngreso, hoy, 'quincena2');
-      var bQ1 = calcularDesglose(e.salarioBase, bono, 'quincena1', loanQuincenal, igssOn, isrOn, f1, diasQ1);
-      var bQ2 = calcularDesglose(e.salarioBase, bono, 'quincena2', loanQuincenal, igssOn, isrOn, f1, diasQ2);
+      var bQ1 = calcularDesglose(e.salarioBase, bono, 'quincena1', loanQ1, igssOn, isrOn, f1, diasQ1);
+      var bQ2 = calcularDesglose(e.salarioBase, bono, 'quincena2', loanQ2, igssOn, isrOn, f1, diasQ2);
       totalQ1 += bQ1.totalNeto;
       totalQ2 += bQ2.totalNeto;
     });
@@ -1387,47 +1409,81 @@ function buildDbShim(fsDb){
     var barClass = l.estado==='completado' ? 'good' : (l.estado==='activo' ? 'warning' : '');
     return '<button class="ledger-row" data-id="'+l.id+'">' +
       '<span class="status-bar '+barClass+'"></span>' +
-      '<span class="row-main"><span class="title">'+esc(l.concepto)+'</span><span class="sub">'+(l.frecuencia==='mensual'?'Cada mes':'Cada 15 días')+' · '+(l.cuotasAplicadas||0)+'/'+l.numCuotas+' cuotas</span></span>' +
+      '<span class="row-main"><span class="title">'+esc(l.concepto)+'</span><span class="sub">'+etiquetaFrecuenciaPrestamo(l)+' · '+(l.cuotasAplicadas||0)+'/'+l.numCuotas+' cuotas</span></span>' +
       '<span class="row-amount"><span class="amt">'+fmtQ(l.saldoPendiente)+'</span><span class="pill '+pillClass+'">'+pillLabel+'</span></span>' +
     '</button>';
   }
 
   function openPrestamoForm(emp){
     var body =
-      '<div class="field"><label for="pr-concepto">Concepto</label><input id="pr-concepto" placeholder="Ej. Préstamo personal, daño de herramienta"/></div>' +
-      '<div class="field-row">' +
-        '<div class="field"><label for="pr-monto">Monto total (Q)</label><input id="pr-monto" type="number" min="0.01" step="0.01"/></div>' +
-        '<div class="field"><label for="pr-cuotas">Número de cuotas</label><input id="pr-cuotas" type="number" min="1" step="1" value="1"/></div>' +
-      '</div>' +
-      '<div class="field"><label>¿Cada cuánto se descuenta?</label><div class="radio-group">' +
-        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="quincenal" checked/><span>Cada 15 días</span></label>' +
-        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="mensual"/><span>Cada mes</span></label>' +
+      '<div class="field"><label for="pr-concepto">Concepto / motivo</label><input id="pr-concepto" placeholder="Ej. Préstamo personal, daño de herramienta"/></div>' +
+      '<div class="field"><label for="pr-monto">Monto total (Q)</label><input id="pr-monto" type="number" min="0.01" step="0.01"/></div>' +
+      '<div class="field"><label>¿En qué fecha se descuenta?</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="quincena1"/><span>Solo día 15</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="quincena2"/><span>Solo fin de mes</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="pr-frecuencia" value="ambas" checked/><span>Ambas fechas</span></label>' +
       '</div></div>' +
+      '<div id="pr-campo-unico" class="field" hidden><label for="pr-monto-cuota">¿Cuánto se le descontará cada vez? (Q)</label><input id="pr-monto-cuota" type="number" min="0.01" step="0.01"/></div>' +
+      '<div id="pr-campo-ambas" class="field-row">' +
+        '<div class="field"><label for="pr-monto-q1">Descuento en día 15 (Q)</label><input id="pr-monto-q1" type="number" min="0" step="0.01"/></div>' +
+        '<div class="field"><label for="pr-monto-q2">Descuento en fin de mes (Q)</label><input id="pr-monto-q2" type="number" min="0" step="0.01"/></div>' +
+      '</div>' +
       '<p class="hint" id="pr-preview">—</p>' +
       '<button class="btn btn-primary btn-block" id="pr-submit" style="margin-top:6px;">Registrar</button>';
     openSheet('Nuevo préstamo o descuento', body, function(root){
+      function esAmbas(){ return root.querySelector('input[name=pr-frecuencia]:checked').value === 'ambas'; }
+      function toggleCampos(){
+        root.querySelector('#pr-campo-unico').hidden = esAmbas();
+        root.querySelector('#pr-campo-ambas').hidden = !esAmbas();
+        preview();
+      }
       function preview(){
         var monto = Number(root.querySelector('#pr-monto').value)||0;
-        var cuotas = Math.max(1, parseInt(root.querySelector('#pr-cuotas').value,10)||1);
-        root.querySelector('#pr-preview').textContent = cuotas+' cuota(s) de '+fmtQ(round2(monto/cuotas))+' cada una, aplicadas automáticamente a los próximos pagos.';
+        if(!monto){ root.querySelector('#pr-preview').textContent = '—'; return; }
+        if(esAmbas()){
+          var q1 = Number(root.querySelector('#pr-monto-q1').value)||0;
+          var q2 = Number(root.querySelector('#pr-monto-q2').value)||0;
+          var porVuelta = q1 + q2;
+          if(!porVuelta){ root.querySelector('#pr-preview').textContent = 'Escribe el monto de cada quincena.'; return; }
+          var vueltas = Math.ceil(monto / porVuelta);
+          root.querySelector('#pr-preview').textContent = 'Se descontará '+fmtQ(q1)+' cada día 15 y '+fmtQ(q2)+' cada fin de mes, hasta completar '+fmtQ(monto)+' (aprox. '+(vueltas*2)+' descuentos; el último se ajusta automáticamente al saldo restante).';
+        } else {
+          var cuota = Number(root.querySelector('#pr-monto-cuota').value)||0;
+          if(!cuota){ root.querySelector('#pr-preview').textContent = 'Escribe cuánto se descontará cada vez.'; return; }
+          var n = Math.ceil(monto / cuota);
+          var resto = round2(monto - cuota*(n-1));
+          root.querySelector('#pr-preview').textContent = n+' descuento(s) de '+fmtQ(cuota)+(n>1?' (el último de '+fmtQ(resto)+')':'')+', hasta completar '+fmtQ(monto)+'.';
+        }
       }
-      root.querySelector('#pr-monto').addEventListener('input', preview);
-      root.querySelector('#pr-cuotas').addEventListener('input', preview);
-      preview();
+      root.querySelectorAll('input[name=pr-frecuencia]').forEach(function(r){ r.addEventListener('change', toggleCampos); });
+      ['#pr-monto','#pr-monto-cuota','#pr-monto-q1','#pr-monto-q2'].forEach(function(sel){ root.querySelector(sel).addEventListener('input', preview); });
+      toggleCampos();
       root.querySelector('#pr-submit').addEventListener('click', async function(){
         var concepto = root.querySelector('#pr-concepto').value.trim();
         var monto = round2(root.querySelector('#pr-monto').value);
-        var cuotas = Math.max(1, parseInt(root.querySelector('#pr-cuotas').value,10)||1);
         var frecuencia = root.querySelector('input[name=pr-frecuencia]:checked').value;
         if(!concepto){ toast('Escribe el concepto', true); return; }
         if(!monto || monto <= 0){ toast('El monto debe ser mayor a 0', true); return; }
+        var data = {
+          empleadoId: emp.id, empleadoNombre: emp.nombre, concepto: concepto, empresaId: state.empresaActualId,
+          montoTotal: monto, frecuencia: frecuencia, saldoPendiente: monto, cuotasAplicadas: 0, estado: 'activo',
+          creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
+        };
+        if(frecuencia === 'ambas'){
+          var q1 = round2(root.querySelector('#pr-monto-q1').value);
+          var q2 = round2(root.querySelector('#pr-monto-q2').value);
+          if(!q1 && !q2){ toast('Escribe el monto de al menos una quincena', true); return; }
+          data.montoQ1 = q1; data.montoQ2 = q2;
+          data.montoCuota = q1 || q2;
+          data.numCuotas = Math.ceil(monto / Math.max(0.01, q1+q2)) * 2;
+        } else {
+          var cuota = round2(root.querySelector('#pr-monto-cuota').value);
+          if(!cuota || cuota <= 0){ toast('Escribe cuánto se descontará cada vez', true); return; }
+          data.montoCuota = cuota;
+          data.numCuotas = Math.ceil(monto / cuota);
+        }
         try{
-          await state.db.collection('prestamos').add({
-            empleadoId: emp.id, empleadoNombre: emp.nombre, concepto: concepto, empresaId: state.empresaActualId,
-            montoTotal: monto, numCuotas: cuotas, montoCuota: round2(monto/cuotas),
-            frecuencia: frecuencia, saldoPendiente: monto, cuotasAplicadas: 0, estado: 'activo',
-            creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
-          });
+          await state.db.collection('prestamos').add(data);
           toast('Préstamo/descuento registrado'); closeSheet();
         }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
       });
@@ -1435,10 +1491,13 @@ function buildDbShim(fsDb){
   }
 
   function openPrestamoDetail(l){
+    var cuotaTexto = l.frecuencia === 'ambas'
+      ? fmtQ(l.montoQ1||0)+' (día 15) / '+fmtQ(l.montoQ2||0)+' (fin de mes)'
+      : fmtQ(l.montoCuota)+' · '+etiquetaFrecuenciaPrestamo(l);
     var body =
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Monto total</span><span class="amt">'+fmtQ(l.montoTotal)+'</span></div>' +
-        '<div class="breakdown-row"><span>Cuota</span><span class="amt">'+fmtQ(l.montoCuota)+' · '+(l.frecuencia==='mensual'?'cada mes':'cada 15 días')+'</span></div>' +
+        '<div class="breakdown-row"><span>Descuento por cuota</span><span class="amt">'+cuotaTexto+'</span></div>' +
         '<div class="breakdown-row"><span>Cuotas aplicadas</span><span>'+(l.cuotasAplicadas||0)+' / '+l.numCuotas+'</span></div>' +
         '<div class="breakdown-row total"><span>Saldo pendiente</span><span class="amt">'+fmtQ(l.saldoPendiente)+'</span></div>' +
       '</div>' +
@@ -1534,18 +1593,21 @@ function buildDbShim(fsDb){
         if(loans.length === 0){ wrap.innerHTML = ''; return; }
         wrap.innerHTML = '<div class="divider-label">Préstamos y descuentos activos</div><div class="ledger" style="padding:2px 12px;">' +
           loans.map(function(l){
-            var cuota = round2(Math.min(l.montoCuota, l.saldoPendiente));
-            var defChecked = (periodo === 'mensual') === (l.frecuencia === 'mensual');
-            return '<label class="loan-check"><input type="checkbox" class="loan-cb" data-loan="'+l.id+'" data-cuota="'+cuota+'" data-concepto="'+esc(l.concepto)+'" '+(defChecked?'checked':'')+'/>' +
-              '<span class="lc-text"><span class="t1">'+esc(l.concepto)+'</span><span class="t2">'+(l.frecuencia==='mensual'?'Cada mes':'Cada 15 días')+' · saldo '+fmtQ(l.saldoPendiente)+'</span></span>' +
-              '<span class="lc-amt">-'+fmtQ(cuota)+'</span></label>';
+            var montoSugerido = montoCuotaParaPeriodo(l, periodo) || l.montoCuota;
+            var cuota = round2(Math.min(montoSugerido, l.saldoPendiente));
+            var aplica = montoCuotaParaPeriodo(l, periodo) > 0;
+            return '<label class="loan-check"><input type="checkbox" class="loan-cb" data-loan="'+l.id+'" data-concepto="'+esc(l.concepto)+'" '+(aplica?'checked':'')+'/>' +
+              '<span class="lc-text"><span class="t1">Descuento por: '+esc(l.concepto)+'</span><span class="t2">'+etiquetaFrecuenciaPrestamo(l)+' · saldo '+fmtQ(l.saldoPendiente)+'</span></span>' +
+              '<input type="number" class="loan-amt-input" data-loan="'+l.id+'" value="'+cuota+'" step="0.01" min="0" style="width:92px;text-align:right;border:1px solid var(--border);border-radius:8px;padding:6px 8px;"/></label>';
           }).join('') + '</div>';
         wrap.querySelectorAll('.loan-cb').forEach(function(cb){ cb.addEventListener('change', recalc); });
+        wrap.querySelectorAll('.loan-amt-input').forEach(function(inp){ inp.addEventListener('input', recalc); inp.addEventListener('click', function(e){ e.stopPropagation(); }); });
       }
       function checkedLoans(){
         var out = [];
         root.querySelectorAll('.loan-cb:checked').forEach(function(cb){
-          out.push({ prestamoId: cb.dataset.loan, concepto: cb.dataset.concepto, monto: Number(cb.dataset.cuota)||0 });
+          var inp = root.querySelector('.loan-amt-input[data-loan="'+cb.dataset.loan+'"]');
+          out.push({ prestamoId: cb.dataset.loan, concepto: cb.dataset.concepto, monto: inp ? (Number(inp.value)||0) : 0 });
         });
         return out;
       }
@@ -1627,7 +1689,7 @@ function buildDbShim(fsDb){
         '<div class="breakdown-row"><span>IGSS</span><span class="amt">'+(p.igss?('-'+fmtQ(p.igss)):'No aplica')+'</span></div>' +
         '<div class="breakdown-row"><span>ISR</span><span class="amt">'+(p.isr?('-'+fmtQ(p.isr)):'No aplica')+'</span></div>' +
         (p.otrasDeduccionesManual? '<div class="breakdown-row"><span>Deducción puntual'+(p.otrasDeduccionesNota?' ('+esc(p.otrasDeduccionesNota)+')':'')+'</span><span class="amt">-'+fmtQ(p.otrasDeduccionesManual)+'</span></div>' : '') +
-        (p.prestamosAplicados||[]).map(function(pa){ return '<div class="breakdown-row"><span>'+esc(pa.concepto)+'</span><span class="amt">-'+fmtQ(pa.monto)+'</span></div>'; }).join('') +
+        (p.prestamosAplicados||[]).map(function(pa){ return '<div class="breakdown-row"><span>Descuento por: '+esc(pa.concepto)+'</span><span class="amt">-'+fmtQ(pa.monto)+'</span></div>'; }).join('') +
         '<div class="breakdown-row total"><span>Total neto</span><span class="amt">'+fmtQ(p.totalNeto)+'</span></div>' +
       '</div>' +
       (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '') +
@@ -1748,8 +1810,8 @@ function buildDbShim(fsDb){
         var etiqueta = periodoEtiqueta(ctx.fecha, ctx.periodo);
         var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
         var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
-        var loanApplied = loans.filter(function(l){ return (ctx.periodo === 'mensual') === (l.frecuencia === 'mensual'); })
-          .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(l.montoCuota, l.saldoPendiente)) }; });
+        var loanApplied = loans.filter(function(l){ return montoCuotaParaPeriodo(l, ctx.periodo) > 0; })
+          .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(montoCuotaParaPeriodo(l, ctx.periodo), l.saldoPendiente)) }; });
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, ctx.fecha, ctx.periodo);
@@ -1817,8 +1879,11 @@ function buildDbShim(fsDb){
             row('Salario base', b.salarioBase) + row('Bonificación incentivo', b.bonificacion) + row('Salario bruto', b.salarioBruto) +
             (info.igssOn? row('IGSS ('+fmtPct(getIgssRate())+')', -b.igss) : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
             (info.isrOn? row('ISR estimado', -b.isr) : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
-            info.loanApplied.map(function(l){ return row(l.concepto, -l.monto); }).join('') +
-            '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>' +
+            info.loanApplied.map(function(l){
+              return '<div class="breakdown-row"><span>Descuento por: '+esc(l.concepto)+'</span>' +
+                '<span style="display:flex;align-items:center;gap:4px;">-Q <input type="number" class="loan-amt-input-firma" data-loan="'+l.prestamoId+'" value="'+l.monto+'" step="0.01" min="0" style="width:80px;text-align:right;border:1px solid var(--border);border-radius:8px;padding:4px 6px;"/></span></div>';
+            }).join('') +
+            '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt" id="ps-total-neto">'+fmtQ(b.totalNeto)+'</span></div>' +
           '</div>' +
           '<div class="divider-label">Firma de recibido</div>' +
           '<div class="signature-box"><canvas id="firma-canvas"></canvas></div>' +
@@ -1827,6 +1892,19 @@ function buildDbShim(fsDb){
           '<button class="btn btn-primary btn-block" id="firma-confirmar" style="margin-top:14px;" disabled>Confirmar pago</button>';
 
         function row(label, val){ return '<div class="breakdown-row"><span>'+label+'</span><span class="amt">'+fmtQ(val)+'</span></div>'; }
+
+        function loansEditados(){
+          return info.loanApplied.map(function(l){
+            var inp = content.querySelector('.loan-amt-input-firma[data-loan="'+l.prestamoId+'"]');
+            return { prestamoId: l.prestamoId, concepto: l.concepto, monto: inp ? (Number(inp.value)||0) : l.monto };
+          });
+        }
+        function recalcTotal(){
+          var loanSumNuevo = loansEditados().reduce(function(s,l){ return s + l.monto; }, 0);
+          var totalNuevo = round2(b.salarioBruto - b.igss - b.isr - loanSumNuevo);
+          content.querySelector('#ps-total-neto').textContent = fmtQ(totalNuevo);
+        }
+        content.querySelectorAll('.loan-amt-input-firma').forEach(function(inp){ inp.addEventListener('input', recalcTotal); });
 
         var canvas = content.querySelector('#firma-canvas');
         var c2d = canvas.getContext('2d');
@@ -1877,19 +1955,26 @@ function buildDbShim(fsDb){
           confirmBtn.disabled = true; confirmBtn.textContent = 'Guardando…';
           var firmaDataUrl = canvas.toDataURL('image/png');
           var fresh = computeFor(emp);
+          var loanFinal = loansEditados();
+          var loanSumFinal = loanFinal.reduce(function(s,l){ return s + l.monto; }, 0);
+          var bFinal = Object.assign({}, fresh.b, {
+            otrasDeducciones: round2(loanSumFinal),
+            totalDeducciones: round2(fresh.b.igss + fresh.b.isr + loanSumFinal),
+            totalNeto: round2(fresh.b.salarioBruto - fresh.b.igss - fresh.b.isr - loanSumFinal)
+          });
           var data = Object.assign({
             empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
             periodoTipo: ctx.periodo, periodoEtiqueta: fresh.etiqueta,
             fechaPago: ctx.fecha, estado: 'pagado',
             otrasDeduccionesManual: 0, otrasDeduccionesNota: '',
-            prestamosAplicados: fresh.loanApplied, diasTrabajados: fresh.diasInfo,
+            prestamosAplicados: loanFinal, diasTrabajados: fresh.diasInfo,
             firma: firmaDataUrl, firmadoEn: new Date().toISOString(),
             registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
-          }, fresh.b);
+          }, bFinal);
           try{
             await state.db.collection('pagos').add(data);
-            for(var i=0;i<fresh.loanApplied.length;i++){
-              var la = fresh.loanApplied[i];
+            for(var i=0;i<loanFinal.length;i++){
+              var la = loanFinal[i];
               var loan = state.prestamos.find(function(l){ return l.id === la.prestamoId; });
               if(!loan) continue;
               var nuevoSaldo = round2(Math.max(0, loan.saldoPendiente - la.monto));
