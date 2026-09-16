@@ -1207,7 +1207,7 @@ function buildDbShim(fsDb){
       '<div class="section-title"><h2>Pagos recientes</h2><button class="link-btn" id="ver-todos-pagos">Ver todos</button></div>' +
       '<div id="recientes-wrap"></div>';
 
-    document.getElementById('qa-pagar-sueldos').addEventListener('click', openPagarSueldos);
+    document.getElementById('qa-pagar-sueldos').addEventListener('click', function(){ openPagarSueldos(); });
     var pagarPendienteBtn = document.getElementById('qa-pagar-pendiente');
     if(pagarPendienteBtn) pagarPendienteBtn.addEventListener('click', function(){ openPagarSueldos(pendientesAnterior.periodo, pendientesAnterior.fecha); });
     document.getElementById('qa-pago').addEventListener('click', openPagoForm);
