@@ -359,7 +359,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
@@ -866,6 +866,8 @@ function buildDbShim(fsDb){
         '<div class="field"><label for="li-pass">Contraseña</label><input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>' +
         '<button class="btn btn-primary btn-block" id="li-submit">Entrar</button>' +
         '<button class="btn btn-ghost btn-block" id="li-forgot" style="margin-top:6px;">¿Olvidaste tu contraseña?</button>' +
+        '<div class="divider-label">¿Primera vez aquí?</div>' +
+        '<button class="btn btn-secondary btn-block" id="li-crear-cuenta">Crear cuenta nueva</button>' +
       '</div>'
     );
     document.getElementById('li-submit').addEventListener('click', async function(){
@@ -881,6 +883,32 @@ function buildDbShim(fsDb){
       try{ await sendPasswordResetEmail(auth, email); toast('Te enviamos un correo para restablecer tu contraseña'); }
       catch(e){ toast('No se pudo enviar el correo: '+(e.code||''), true); }
     });
+    document.getElementById('li-crear-cuenta').addEventListener('click', showCrearCuentaScreen);
+  }
+
+  function showCrearCuentaScreen(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Crea tu cuenta</p>' +
+      '<div class="auth-card">' +
+        '<div class="field"><label for="cc-email">Correo</label><input id="cc-email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="username"/></div>' +
+        '<div class="field"><label for="cc-pass">Contraseña</label><input id="cc-pass" type="password" placeholder="Mínimo 6 caracteres" autocomplete="new-password"/></div>' +
+        '<button class="btn btn-primary btn-block" id="cc-submit">Crear cuenta</button>' +
+        '<button class="btn btn-ghost btn-block" id="cc-volver" style="margin-top:6px;">Ya tengo cuenta, iniciar sesión</button>' +
+      '</div>'
+    );
+    document.getElementById('cc-submit').addEventListener('click', async function(){
+      var email = document.getElementById('cc-email').value.trim();
+      var pass = document.getElementById('cc-pass').value;
+      if(!email || !pass){ toast('Escribe tu correo y contraseña', true); return; }
+      if(pass.length < 6){ toast('La contraseña debe tener al menos 6 caracteres', true); return; }
+      try{ await createUserWithEmailAndPassword(auth, email, pass); }
+      catch(e){
+        var msg = e.code === 'auth/email-already-in-use' ? 'Ese correo ya tiene una cuenta, mejor inicia sesión' : 'No se pudo crear la cuenta: '+(e.code||'');
+        toast(msg, true);
+      }
+    });
+    document.getElementById('cc-volver').addEventListener('click', showLoginScreen);
   }
 
   function showCrearPerfilPrimerUsuario(){
@@ -2402,7 +2430,7 @@ function buildDbShim(fsDb){
       var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
       return '<button class="ledger-row" data-id="'+em.id+'">' +
         '<span class="status-bar'+(activa && !vencida ? ' good' : '')+'"></span>' +
-        '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+'</span></span>' +
+        '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+'</span></span>' +
         '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
       '</button>';
     }).join('');
@@ -2416,17 +2444,20 @@ function buildDbShim(fsDb){
         '<label class="radio-chip"><input type="radio" name="lic-estado" value="inactiva" '+(!lic||lic.activa!==true?'checked':'')+'/><span>Inactiva</span></label>' +
       '</div></div>' +
       '<div class="field"><label for="lic-vence">Fecha de vencimiento (informativa)</label><input id="lic-vence" type="date" value="'+esc(lic&&lic.fechaVencimiento||'')+'"/></div>' +
+      '<div class="field"><label for="lic-precio">Precio de venta (Q)</label><input id="lic-precio" type="number" min="0" step="0.01" value="'+(lic&&lic.precioVenta!=null?lic.precioVenta:'')+'"/></div>' +
       '<div class="field"><label for="lic-notas">Notas</label><textarea id="lic-notas" placeholder="Ej. Plan mensual, pagó por transferencia el 10/09">'+esc(lic&&lic.notas||'')+'</textarea></div>' +
-      '<p class="disclaimer">El vencimiento es solo un recordatorio visual; el acceso real se corta o se permite con el estado Activa/Inactiva.</p>' +
+      '<p class="disclaimer">Este panel solo controla la licencia (vencimiento y precio); no da acceso a los empleados, pagos ni documentos de esta empresa.</p>' +
       '<button class="btn btn-primary btn-block" id="lic-submit" style="margin-top:6px;">Guardar</button>';
     openSheet(esc(empresa.nombre), body, function(root){
       root.querySelector('#lic-submit').addEventListener('click', async function(){
         var activa = root.querySelector('input[name=lic-estado]:checked').value === 'activa';
         var fechaVencimiento = root.querySelector('#lic-vence').value;
+        var precioVenta = root.querySelector('#lic-precio').value;
         var notas = root.querySelector('#lic-notas').value.trim();
         try{
           await state.db.collection('licencias').doc(empresa.id).set({
-            activa: activa, fechaVencimiento: fechaVencimiento || null, notas: notas,
+            activa: activa, fechaVencimiento: fechaVencimiento || null,
+            precioVenta: precioVenta === '' ? null : round2(precioVenta), notas: notas,
             actualizadoEn: new Date().toISOString(), actualizadoPor: state.session.nombre
           }, { merge: true });
           toast('Licencia actualizada'); closeSheet();
