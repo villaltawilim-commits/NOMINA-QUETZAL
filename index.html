@@ -311,6 +311,7 @@
       <section id="view-comisiones" hidden></section>
       <section id="view-documentos" hidden></section>
       <section id="view-equipo" hidden></section>
+      <section id="view-licencias" hidden></section>
       <section id="view-sin-empresa" hidden></section>
     </main>
 
@@ -343,6 +344,10 @@
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="9" r="3"/><circle cx="16" cy="10.5" r="2.6"/><path d="M3.5 19c.9-3.2 3-4.8 5.5-4.8s4.6 1.6 5.5 4.8M14.3 15c2 .3 3.5 1.7 4.1 4"/></svg>
         <span>Equipo</span>
       </button>
+      <button data-tab="licencias" id="tab-licencias-btn" hidden>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>
+        <span>Licencias</span>
+      </button>
     </nav>
   </div>
 
@@ -357,7 +362,7 @@ import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
-  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, limit
+  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -379,9 +384,10 @@ function buildDbShim(fsDb){
     var ref = doc(fsDb, collName, id);
     return {
       id: id,
-      set: function(data){ return setDoc(ref, data); },
+      set: function(data, opts){ return setDoc(ref, data, opts); },
       update: function(data){ return updateDoc(ref, data); },
       delete: function(){ return deleteDoc(ref); },
+      get: function(){ return getDoc(ref).then(wrapSnap); },
       onSnapshot: function(next, err){ return onSnapshot(ref, function(s){ next(wrapSnap(s)); }, err); }
     };
   }
@@ -394,12 +400,13 @@ function buildDbShim(fsDb){
       add: function(data){ return addDoc(colRef, data).then(function(r){ return makeDocRef(collName, r.id); }); },
       orderBy: function(field, dir){ return makeCollRef(collName, constraints.concat([orderBy(field, dir||'asc')])); },
       limit: function(n){ return makeCollRef(collName, constraints.concat([limit(n)])); },
+      where: function(field, op, value){ return makeCollRef(collName, constraints.concat([where(field, op, value)])); },
       onSnapshot: function(next, err){
         return onSnapshot(built(), function(snap){ next({ docs: snap.docs.map(wrapSnap) }); }, err);
       }
     };
   }
-  return { collection: function(name){ return makeCollRef(name); } };
+  return { collection: function(name){ return makeCollRef(name); }, documentId: documentId };
 }
 
 (function(){
@@ -413,6 +420,17 @@ function buildDbShim(fsDb){
   var EXENCION_ANUAL_ISR_DEFAULT = 48000;
   var DEFAULT_BONIFICACION = 250;
   var MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
+  var CONTACTO_SOPORTE = 'villaltawilim@gmail.com';
+  function esSuperadmin(){
+    return !!(state.authUser && state.authUser.email && SUPERADMIN_EMAILS.indexOf(state.authUser.email.toLowerCase()) > -1);
+  }
+  function generarCodigoInvitacion(){
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var out = '';
+    for(var i=0;i<8;i++) out += chars[Math.floor(Math.random()*chars.length)];
+    return out;
+  }
 
   function round2(n){ return Math.round((Number(n)||0) * 100) / 100; }
   function round4(n){ return Math.round((Number(n)||0) * 10000) / 10000; }
@@ -621,7 +639,7 @@ function buildDbShim(fsDb){
   function cumpleanosDelMes(){
     var mesActual = new Date().getMonth();
     var empresasIds = empresasAccesibles().map(function(em){ return em.id; });
-    return state.empleados.filter(function(e){
+    return state.empleadosMultiEmpresa.filter(function(e){
       if(e.activo === false) return false;
       if(empresasIds.indexOf(e.empresaId) === -1) return false;
       if(!e.fechaNacimiento) return false;
@@ -646,6 +664,7 @@ function buildDbShim(fsDb){
     db: buildDbShim(firestore),
     authUser: null,
     session: null, // {id, nombre, rol}
+    miEquipoDoc: undefined, // undefined = aún no llega de Firestore; null = no existe
     empleados: [],
     pagos: [],
     prestamos: [],
@@ -654,6 +673,11 @@ function buildDbShim(fsDb){
     equipo: [],
     empresas: [],
     empresaActualId: null,
+    licencia: null,
+    invitaciones: [],
+    empleadosMultiEmpresa: [], // empleados de TODAS las empresas accesibles (solo para cumpleaños y conteos entre empresas)
+    todasEmpresasAdmin: [],
+    todasLicenciasAdmin: [],
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
   };
@@ -695,53 +719,134 @@ function buildDbShim(fsDb){
   }
 
   /* ============================ FIRESTORE LISTENERS ============================ */
+  // Cada usuario solo debe recibir datos de las empresas a las que tiene acceso (state.miEquipoDoc.empresasAcceso).
+  // Estructura en 3 capas: (1) mi propio documento de equipo, siempre permitido leerlo;
+  // (2) empresas/equipo a los que tengo acceso, que se resuscriben solo cuando cambia mi lista de acceso;
+  // (3) datos operativos (empleados/pagos/préstamos/comisiones/documentos/licencia) de la empresa activa,
+  // que se resuscriben solo cuando cambia la empresa seleccionada en el switcher.
   var listenersStarted = false;
   var unsubscribes = [];
+  var unsubscribesAcceso = [];
+  var unsubscribesEmpresa = [];
+  var misEmpresasIdsCacheKey = null;
+  var empresaActualIdCache = undefined;
+
   function initFirestoreListeners(){
     if(listenersStarted) return;
     listenersStarted = true;
     var db = state.db;
 
-    unsubscribes.push(db.collection('empleados').onSnapshot(function(snap){
-      state.empleados = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-      render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados: ' + err.code, true); }));
+    unsubscribes.push(db.collection('equipo').doc(state.authUser.uid).onSnapshot(function(snap){
+      state.miEquipoDoc = snap.exists ? Object.assign({id:snap.id}, snap.data()) : null;
+      actualizarSuscripcionesPorAcceso();
+      checkProfileAndRender();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar tu perfil: ' + err.code, true); }));
 
-    unsubscribes.push(db.collection('pagos').orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
-      state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-      render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar pagos: ' + err.code, true); }));
+    if(esSuperadmin()){
+      unsubscribes.push(db.collection('empresas').onSnapshot(function(snap){
+        state.todasEmpresasAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(err){ toast('No se pudo sincronizar empresas (admin): ' + err.code, true); }));
 
-    unsubscribes.push(db.collection('prestamos').onSnapshot(function(snap){
-      state.prestamos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-      render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar préstamos: ' + err.code, true); }));
+      unsubscribes.push(db.collection('licencias').onSnapshot(function(snap){
+        state.todasLicenciasAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(err){ toast('No se pudo sincronizar licencias (admin): ' + err.code, true); }));
+    }
+  }
 
-    unsubscribes.push(db.collection('comisiones').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
-      state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-      render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar comisiones: ' + err.code, true); }));
+  function actualizarSuscripcionesPorAcceso(){
+    var ids = (state.miEquipoDoc && state.miEquipoDoc.empresasAcceso) || [];
+    var key = ids.slice().sort().join(',');
+    if(key === misEmpresasIdsCacheKey) return;
+    misEmpresasIdsCacheKey = key;
 
-    unsubscribes.push(db.collection('documentos').orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
-      state.documentos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-      render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar documentos: ' + err.code, true); }));
+    unsubscribesAcceso.forEach(function(u){ try{ u(); }catch(e){} });
+    unsubscribesAcceso = [];
 
-    unsubscribes.push(db.collection('equipo').onSnapshot(function(snap){
+    if(ids.length === 0){
+      state.empresas = [];
+      state.equipo = state.miEquipoDoc ? [state.miEquipoDoc] : [];
+      state.empleadosMultiEmpresa = [];
+      render();
+      return;
+    }
+
+    var db = state.db;
+    var idsAcotados = ids.slice(0, 10); // límite de Firestore para consultas 'in' / 'array-contains-any'
+
+    unsubscribesAcceso.push(db.collection('empresas').where(db.documentId(), 'in', idsAcotados).onSnapshot(function(snap){
+      state.empresas = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empresas: ' + err.code, true); }));
+
+    unsubscribesAcceso.push(db.collection('equipo').where('empresasAcceso','array-contains-any', idsAcotados).onSnapshot(function(snap){
       state.equipo = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       checkProfileAndRender();
     }, function(err){ if(state.authUser) toast('No se pudo sincronizar el equipo: ' + err.code, true); }));
 
-    unsubscribes.push(db.collection('empresas').onSnapshot(function(snap){
-      state.empresas = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+    unsubscribesAcceso.push(db.collection('empleados').where('empresaId','in', idsAcotados).onSnapshot(function(snap){
+      state.empleadosMultiEmpresa = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empresas: ' + err.code, true); }));
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados (multi-empresa): ' + err.code, true); }));
+  }
+
+  function actualizarSuscripcionesEmpresa(){
+    if(state.empresaActualId === empresaActualIdCache) return;
+    empresaActualIdCache = state.empresaActualId;
+
+    unsubscribesEmpresa.forEach(function(u){ try{ u(); }catch(e){} });
+    unsubscribesEmpresa = [];
+    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = null; state.invitaciones = [];
+
+    var id = state.empresaActualId;
+    if(!id) return;
+    var db = state.db;
+
+    unsubscribesEmpresa.push(db.collection('empleados').where('empresaId','==', id).onSnapshot(function(snap){
+      state.empleados = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('pagos').where('empresaId','==', id).orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
+      state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar pagos: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('prestamos').where('empresaId','==', id).onSnapshot(function(snap){
+      state.prestamos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar préstamos: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('comisiones').where('empresaId','==', id).orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+      state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar comisiones: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('documentos').where('empresaId','==', id).orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+      state.documentos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar documentos: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('licencias').doc(id).onSnapshot(function(snap){
+      state.licencia = snap.exists ? Object.assign({id:snap.id}, snap.data()) : null;
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar la licencia: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('invitaciones').where('empresaId','==', id).onSnapshot(function(snap){
+      state.invitaciones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar invitaciones: ' + err.code, true); }));
   }
 
   function teardownFirestoreListeners(){
     unsubscribes.forEach(function(u){ try{ u(); }catch(e){} });
-    unsubscribes = [];
+    unsubscribesAcceso.forEach(function(u){ try{ u(); }catch(e){} });
+    unsubscribesEmpresa.forEach(function(u){ try{ u(); }catch(e){} });
+    unsubscribes = []; unsubscribesAcceso = []; unsubscribesEmpresa = [];
     listenersStarted = false;
+    misEmpresasIdsCacheKey = null;
+    empresaActualIdCache = undefined;
   }
 
   /* ============================ AUTENTICACIÓN (Firebase Auth) ============================ */
@@ -784,46 +889,53 @@ function buildDbShim(fsDb){
       '<p class="tag">Configura tu cuenta para empezar</p>' +
       '<div class="auth-card">' +
         '<div class="field"><label for="onb-nombre">Tu nombre</label><input id="onb-nombre" placeholder="Ej. María López"/></div>' +
-        '<div class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
-        '<p class="disclaimer" style="margin-bottom:14px;">Serás la primera persona del equipo, con rol <strong>Administrador</strong>.</p>' +
-        '<button class="btn btn-primary btn-block" id="onb-submit">Crear</button>' +
+        '<div class="radio-group" style="margin-bottom:14px;">' +
+          '<label class="radio-chip"><input type="radio" name="onb-modo" value="nueva" checked/><span>Crear mi empresa</span></label>' +
+          '<label class="radio-chip"><input type="radio" name="onb-modo" value="codigo"/><span>Tengo un código de invitación</span></label>' +
+        '</div>' +
+        '<div id="onb-campo-nueva" class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
+        '<div id="onb-campo-codigo" class="field" hidden><label for="onb-codigo">Código de invitación</label><input id="onb-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
+        '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">Serás la primera persona de tu empresa, con rol <strong>Administrador</strong>. Tu licencia deberá ser activada por el proveedor antes de poder usar la app.</p>' +
+        '<button class="btn btn-primary btn-block" id="onb-submit">Continuar</button>' +
       '</div>'
     );
+    var radios = document.querySelectorAll('input[name=onb-modo]');
+    radios.forEach(function(r){ r.addEventListener('change', function(){
+      var esCodigo = document.querySelector('input[name=onb-modo]:checked').value === 'codigo';
+      document.getElementById('onb-campo-nueva').hidden = esCodigo;
+      document.getElementById('onb-campo-codigo').hidden = !esCodigo;
+      document.getElementById('onb-nota').textContent = esCodigo
+        ? 'Se te asignará el acceso y el rol que definió quien te invitó.'
+        : 'Serás la primera persona de tu empresa, con rol Administrador. Tu licencia deberá ser activada por el proveedor antes de poder usar la app.';
+    }); });
     document.getElementById('onb-submit').addEventListener('click', async function(){
       var nombre = document.getElementById('onb-nombre').value.trim();
-      var empresaNombre = document.getElementById('onb-empresa').value.trim();
-      if(!nombre){ toast('Escribe tu nombre', true); return; }
-      if(!empresaNombre){ toast('Escribe el nombre de tu empresa', true); return; }
-      try{
-        var empresaRef = await state.db.collection('empresas').add({ nombre: empresaNombre, creadaPor: nombre, creadaEn: new Date().toISOString() });
-        await state.db.collection('equipo').doc(state.authUser.uid).set({
-          nombre: nombre, rol: 'administrador', empresasAcceso: [empresaRef.id], activo: true,
-          email: state.authUser.email, creadoEn: new Date().toISOString()
-        });
-        state.empresaActualId = empresaRef.id;
-      }catch(e){ toast('No se pudo crear: '+(e.code||''), true); }
-    });
-  }
-
-  function showCompletarPerfil(){
-    showAuthScreen(
-      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
-      '<p class="tag">Completa tu perfil</p>' +
-      '<div class="auth-card">' +
-        '<div class="field"><label for="cp-nombre">Tu nombre</label><input id="cp-nombre" placeholder="Ej. Carlos Ruiz"/></div>' +
-        '<p class="disclaimer" style="margin-bottom:14px;">Un Administrador deberá darte acceso a una empresa desde Equipo → Empresas.</p>' +
-        '<button class="btn btn-primary btn-block" id="cp-submit">Continuar</button>' +
-      '</div>'
-    );
-    document.getElementById('cp-submit').addEventListener('click', async function(){
-      var nombre = document.getElementById('cp-nombre').value.trim();
+      var esCodigo = document.querySelector('input[name=onb-modo]:checked').value === 'codigo';
       if(!nombre){ toast('Escribe tu nombre', true); return; }
       try{
-        await state.db.collection('equipo').doc(state.authUser.uid).set({
-          nombre: nombre, rol: 'editor', empresasAcceso: [], activo: true,
-          email: state.authUser.email, creadoEn: new Date().toISOString()
-        });
-      }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+        if(esCodigo){
+          var codigo = document.getElementById('onb-codigo').value.trim().toUpperCase();
+          if(!codigo){ toast('Escribe el código de invitación', true); return; }
+          var invSnap = await state.db.collection('invitaciones').doc(codigo).get();
+          if(!invSnap.exists){ toast('Código inválido', true); return; }
+          var inv = invSnap.data();
+          if(inv.usado){ toast('Este código ya fue usado', true); return; }
+          await state.db.collection('equipo').doc(state.authUser.uid).set({
+            nombre: nombre, rol: inv.rol || 'editor', empresasAcceso: [inv.empresaId], activo: true,
+            email: state.authUser.email, creadoEn: new Date().toISOString()
+          });
+          await state.db.collection('invitaciones').doc(codigo).update({ usado: true, usadoPor: nombre, usadoEn: new Date().toISOString() });
+        } else {
+          var empresaNombre = document.getElementById('onb-empresa').value.trim();
+          if(!empresaNombre){ toast('Escribe el nombre de tu empresa', true); return; }
+          var empresaRef = await state.db.collection('empresas').add({ nombre: empresaNombre, creadaPor: nombre, creadaEn: new Date().toISOString() });
+          await state.db.collection('equipo').doc(state.authUser.uid).set({
+            nombre: nombre, rol: 'administrador', empresasAcceso: [empresaRef.id], activo: true,
+            email: state.authUser.email, creadoEn: new Date().toISOString()
+          });
+          state.empresaActualId = empresaRef.id;
+        }
+      }catch(e){ toast('No se pudo continuar: '+(e.code||''), true); }
     });
   }
 
@@ -838,7 +950,8 @@ function buildDbShim(fsDb){
 
   function checkProfileAndRender(){
     if(!state.authUser) return;
-    var miDoc = state.equipo.find(function(m){ return m.id === state.authUser.uid; });
+    if(state.miEquipoDoc === undefined) return; // aún no llega nuestro propio documento
+    var miDoc = state.miEquipoDoc;
     if(miDoc){
       if(miDoc.activo === false){ showCuentaDesactivada(); return; }
       state.session = { id: miDoc.id, nombre: miDoc.nombre, rol: miDoc.rol };
@@ -848,8 +961,7 @@ function buildDbShim(fsDb){
       return;
     }
     state.session = null;
-    if(state.equipo.length === 0){ showCrearPerfilPrimerUsuario(); }
-    else { showCompletarPerfil(); }
+    showCrearPerfilPrimerUsuario();
   }
 
   onAuthStateChanged(auth, function(user){
@@ -861,8 +973,10 @@ function buildDbShim(fsDb){
       teardownFirestoreListeners();
       state.authUser = null;
       state.session = null;
+      state.miEquipoDoc = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
-      state.equipo = []; state.empresas = []; state.empresaActualId = null;
+      state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
+      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = [];
       showLoginScreen();
     }
   });
@@ -874,9 +988,23 @@ function buildDbShim(fsDb){
     pill.className = 'role-pill' + (state.session.rol === 'administrador' ? '' : ' editor');
     document.getElementById('tab-equipo-btn').hidden = state.session.rol !== 'administrador';
     if(state.tab === 'equipo' && state.session.rol !== 'administrador'){ state.tab = 'resumen'; }
+    var btnLicencias = document.getElementById('tab-licencias-btn');
+    if(btnLicencias) btnLicencias.hidden = !esSuperadmin();
+    if(state.tab === 'licencias' && !esSuperadmin()){ state.tab = 'resumen'; }
     var accesibles = empresasAccesibles();
     var sel = document.getElementById('empresa-switcher');
     sel.innerHTML = accesibles.map(function(em){ return '<option value="'+em.id+'"'+(em.id===state.empresaActualId?' selected':'')+'>'+esc(em.nombre)+'</option>'; }).join('');
+  }
+
+  function licenciaVigente(){
+    return esSuperadmin() || !!(state.licencia && state.licencia.activa === true);
+  }
+
+  function renderLicenciaBloqueada(){
+    var el = document.getElementById('view-sin-empresa');
+    el.innerHTML =
+      '<div class="empty-state" style="margin-top:40px;"><div class="display">Licencia inactiva</div>' +
+      'El acceso de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> está pausado. Contacta al proveedor del sistema ('+esc(CONTACTO_SOPORTE)+') para activarlo.</div>';
   }
 
   function renderSinEmpresa(){
@@ -891,14 +1019,17 @@ function buildDbShim(fsDb){
   function render(){
     if(!state.session) return;
     sincronizarEmpresaActual();
+    actualizarSuscripcionesEmpresa();
     updateHeaderIdentity();
-    var sinEmpresa = !state.empresaActualId && state.tab !== 'equipo';
+    var sinEmpresa = !state.empresaActualId && state.tab !== 'equipo' && state.tab !== 'licencias';
+    var licenciaOk = state.tab === 'equipo' || state.tab === 'licencias' || !state.empresaActualId || licenciaVigente();
     document.querySelectorAll('#tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === state.tab); });
-    document.getElementById('fab-btn').style.display = (sinEmpresa || state.tab === 'equipo') ? 'none' : 'flex';
-    ['resumen','empleados','nomina','comisiones','documentos','equipo','sin-empresa'].forEach(function(t){
+    document.getElementById('fab-btn').style.display = (sinEmpresa || !licenciaOk || state.tab === 'equipo' || state.tab === 'licencias') ? 'none' : 'flex';
+    ['resumen','empleados','nomina','comisiones','documentos','equipo','licencias','sin-empresa'].forEach(function(t){
       document.getElementById('view-'+t).hidden = true;
     });
     if(sinEmpresa){ document.getElementById('view-sin-empresa').hidden = false; renderSinEmpresa(); return; }
+    if(!licenciaOk){ document.getElementById('view-sin-empresa').hidden = false; renderLicenciaBloqueada(); return; }
     document.getElementById('view-'+state.tab).hidden = false;
     if(state.tab === 'resumen') renderResumen();
     if(state.tab === 'empleados') renderEmpleados();
@@ -906,6 +1037,7 @@ function buildDbShim(fsDb){
     if(state.tab === 'comisiones') renderComisiones();
     if(state.tab === 'documentos') renderDocumentos();
     if(state.tab === 'equipo') renderEquipo();
+    if(state.tab === 'licencias') renderLicenciasAdmin();
   }
 
   /* ============================ RESUMEN ============================ */
@@ -2065,14 +2197,22 @@ function buildDbShim(fsDb){
     }
     var list = state.equipo.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
     var empresasList = state.empresas.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    var invitacionesActivas = (state.invitaciones||[]).filter(function(i){ return !i.usado; });
     el.innerHTML =
       '<div class="view-head"><h1>Equipo</h1><p>Usuarios, empresas y roles dentro de la app</p></div>' +
-      '<div class="banner">La protección real de los datos la controla <strong>Firebase Authentication</strong>: solo las cuentas que crees en la consola de Firebase pueden entrar. Lo de aquí abajo organiza el trabajo del equipo y qué empresa ve cada quien, pero no es un candado de seguridad entre empresas.</div>' +
+      '<div class="banner">Cada empresa solo ve sus propios datos. Para agregar una persona a tu equipo, genera un código de invitación y compárteselo: al iniciar sesión por primera vez (con una cuenta creada en Firebase Authentication) lo usará para unirse directamente a tu empresa.</div>' +
       '<div class="section-title" style="margin-top:0;"><h2>Empresas</h2><button class="link-btn" id="add-empresa">+ Nueva</button></div>' +
       '<div class="ledger" id="empresas-wrap"></div>' +
+      '<div class="section-title"><h2>Invitar a mi equipo</h2><button class="link-btn" id="gen-invitacion" '+(state.empresaActualId?'':'disabled')+'>+ Generar código</button></div>' +
+      (invitacionesActivas.length === 0 ? '<div class="empty-state">Sin códigos pendientes</div>' :
+        '<div class="ledger" id="invitaciones-wrap">' + invitacionesActivas.map(function(i){
+          return '<div class="ledger-row" style="cursor:default;"><span class="status-bar"></span>' +
+            '<span class="row-main"><span class="title" style="font-family:\'Courier New\',monospace;letter-spacing:.05em;">'+esc(i.id)+'</span><span class="sub">'+(i.rol==='administrador'?'Administrador':'Editor')+'</span></span>' +
+            '<button class="icon-btn inv-borrar" data-id="'+i.id+'" title="Eliminar código"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
+        }).join('') + '</div>'
+      ) +
       '<div class="section-title"><h2>Usuarios</h2></div>' +
       '<div class="ledger" id="equipo-wrap"></div>' +
-      '<p class="disclaimer">Para agregar una persona nueva, créala en la consola de Firebase (Authentication → Users) y comparte el correo y contraseña con ella; al iniciar sesión por primera vez completará su nombre aquí.</p>' +
       '<div class="divider-label">Parámetros de IGSS / ISR — '+esc(empresaActual().nombre||'—')+'</div>' +
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>IGSS</span><span class="amt">'+fmtPct(getIgssRate())+'</span></div>' +
@@ -2086,6 +2226,16 @@ function buildDbShim(fsDb){
     document.getElementById('add-empresa').addEventListener('click', openEmpresaForm);
     var pfBtn = el.querySelector('#editar-parametros-fiscales');
     if(pfBtn) pfBtn.addEventListener('click', openParametrosFiscalesForm);
+
+    var genInvBtn = document.getElementById('gen-invitacion');
+    if(genInvBtn) genInvBtn.addEventListener('click', function(){ openGenerarInvitacion(); });
+    el.querySelectorAll('.inv-borrar').forEach(function(btn){
+      btn.addEventListener('click', async function(){
+        if(!confirm('¿Eliminar este código de invitación?')) return;
+        try{ await state.db.collection('invitaciones').doc(btn.dataset.id).delete(); toast('Código eliminado'); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
 
     var empresasWrap = document.getElementById('empresas-wrap');
     if(empresasList.length === 0){
@@ -2190,7 +2340,7 @@ function buildDbShim(fsDb){
         reader.readAsDataURL(file);
       });
       root.querySelector('#ed-delete').addEventListener('click', async function(){
-        var nEmpleados = state.empleados.filter(function(e){ return e.empresaId === empresa.id; }).length;
+        var nEmpleados = state.empleadosMultiEmpresa.filter(function(e){ return e.empresaId === empresa.id; }).length;
         var msg = nEmpleados > 0
           ? '¿Eliminar "'+empresa.nombre+'"? Tiene '+nEmpleados+' empleado(s) registrados — sus datos no se borrarán, pero quedarán inaccesibles desde la app al eliminar la empresa. Esta acción no se puede deshacer.'
           : '¿Eliminar "'+empresa.nombre+'"? Esta acción no se puede deshacer.';
@@ -2227,6 +2377,83 @@ function buildDbShim(fsDb){
           }
           toast('Empresa actualizada'); closeSheet();
         }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function renderLicenciasAdmin(){
+    var el = document.getElementById('view-licencias');
+    var empresas = state.todasEmpresasAdmin.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    var licPorId = {};
+    state.todasLicenciasAdmin.forEach(function(l){ licPorId[l.id] = l; });
+    var hoy = todayISO();
+    el.innerHTML =
+      '<div class="view-head"><h1>Licencias</h1><p>Activa o pausa el acceso de cada empresa cliente</p></div>' +
+      '<div class="ledger" id="licencias-wrap"></div>';
+    var wrap = document.getElementById('licencias-wrap');
+    if(empresas.length === 0){
+      wrap.innerHTML = '<div class="empty-state">Aún no hay empresas registradas</div>';
+      return;
+    }
+    wrap.innerHTML = empresas.map(function(em){
+      var lic = licPorId[em.id];
+      var activa = !!(lic && lic.activa === true);
+      var vencida = !!(lic && lic.fechaVencimiento && lic.fechaVencimiento < hoy);
+      var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
+      return '<button class="ledger-row" data-id="'+em.id+'">' +
+        '<span class="status-bar'+(activa && !vencida ? ' good' : '')+'"></span>' +
+        '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+'</span></span>' +
+        '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+      '</button>';
+    }).join('');
+    wireLedgerRows(wrap, empresas, function(em){ openLicenciaDetalle(em, licPorId[em.id]); });
+  }
+
+  function openLicenciaDetalle(empresa, lic){
+    var body =
+      '<div class="field"><label>Estado</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="lic-estado" value="activa" '+(lic&&lic.activa===true?'checked':'')+'/><span>Activa</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="lic-estado" value="inactiva" '+(!lic||lic.activa!==true?'checked':'')+'/><span>Inactiva</span></label>' +
+      '</div></div>' +
+      '<div class="field"><label for="lic-vence">Fecha de vencimiento (informativa)</label><input id="lic-vence" type="date" value="'+esc(lic&&lic.fechaVencimiento||'')+'"/></div>' +
+      '<div class="field"><label for="lic-notas">Notas</label><textarea id="lic-notas" placeholder="Ej. Plan mensual, pagó por transferencia el 10/09">'+esc(lic&&lic.notas||'')+'</textarea></div>' +
+      '<p class="disclaimer">El vencimiento es solo un recordatorio visual; el acceso real se corta o se permite con el estado Activa/Inactiva.</p>' +
+      '<button class="btn btn-primary btn-block" id="lic-submit" style="margin-top:6px;">Guardar</button>';
+    openSheet(esc(empresa.nombre), body, function(root){
+      root.querySelector('#lic-submit').addEventListener('click', async function(){
+        var activa = root.querySelector('input[name=lic-estado]:checked').value === 'activa';
+        var fechaVencimiento = root.querySelector('#lic-vence').value;
+        var notas = root.querySelector('#lic-notas').value.trim();
+        try{
+          await state.db.collection('licencias').doc(empresa.id).set({
+            activa: activa, fechaVencimiento: fechaVencimiento || null, notas: notas,
+            actualizadoEn: new Date().toISOString(), actualizadoPor: state.session.nombre
+          }, { merge: true });
+          toast('Licencia actualizada'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openGenerarInvitacion(){
+    var body =
+      '<div class="field"><label>Rol para quien use este código</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="inv-rol" value="editor" checked/><span>Editor de nómina</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="inv-rol" value="administrador"/><span>Administrador</span></label>' +
+      '</div></div>' +
+      '<p class="disclaimer">Comparte el código con la persona; lo usará al iniciar sesión por primera vez para unirse a <strong>'+esc(empresaActual().nombre)+'</strong> con este rol. Es de un solo uso.</p>' +
+      '<button class="btn btn-primary btn-block" id="inv-submit">Generar código</button>';
+    openSheet('Generar invitación', body, function(root){
+      root.querySelector('#inv-submit').addEventListener('click', async function(){
+        var rol = root.querySelector('input[name=inv-rol]:checked').value;
+        var codigo = generarCodigoInvitacion();
+        try{
+          await state.db.collection('invitaciones').doc(codigo).set({
+            empresaId: state.empresaActualId, rol: rol, usado: false,
+            creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          });
+          toast('Código generado: ' + codigo); closeSheet();
+        }catch(e){ toast('No se pudo generar: '+(e.code||''), true); }
       });
     });
   }
