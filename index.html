@@ -2901,6 +2901,7 @@ function buildDbShim(fsDb){
 
   function openNuevaActualizacion(){
     var body =
+      '<p class="hint" style="margin-top:0;">Al crearla, quedará activada de una vez solo en tus propias empresas, para que la pruebes tú primero. A los demás clientes se la das después, uno por uno, desde "Asignar".</p>' +
       '<div class="field"><label for="fe-nombre">Nombre de la actualización</label><input id="fe-nombre" placeholder="Ej. Control de vacaciones"/></div>' +
       '<div class="field"><label for="fe-desc">Descripción (opcional)</label><textarea id="fe-desc" placeholder="Para recordar de qué se trata"></textarea></div>' +
       '<button class="btn btn-primary btn-block" id="fe-submit" style="margin-top:6px;">Registrar</button>';
@@ -2910,8 +2911,14 @@ function buildDbShim(fsDb){
         var descripcion = root.querySelector('#fe-desc').value.trim();
         if(!nombre){ toast('Escribe el nombre de la actualización', true); return; }
         try{
-          await state.db.collection('features').add({ nombre: nombre, descripcion: descripcion, creadoEn: new Date().toISOString() });
-          toast('Actualización registrada'); closeSheet();
+          var featureRef = await state.db.collection('features').add({ nombre: nombre, descripcion: descripcion, creadoEn: new Date().toISOString() });
+          var misEmpresas = empresasAccesibles();
+          for(var i=0;i<misEmpresas.length;i++){
+            var campo = {};
+            campo['featuresHabilitadas.' + featureRef.id] = true;
+            await state.db.collection('licencias').doc(misEmpresas[i].id).set(campo, { merge: true });
+          }
+          toast('Actualización registrada y activada en tus empresas'); closeSheet();
         }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
       });
     });
