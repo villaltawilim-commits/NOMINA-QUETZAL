@@ -1227,11 +1227,21 @@ function buildDbShim(fsDb){
 
   async function enviarCodigoDosPasos(manual){
     var email = state.authUser.email;
+    // checkProfileAndRender() puede dispararse varias veces casi al mismo tiempo (Firestore
+    // entrega la primera lectura del caché y luego otra vez del servidor), así que la marca de
+    // "ya se está enviando" debe ponerse ANTES de la llamada async, no después de que responda,
+    // o si no cada disparo alcanza a mandar su propio correo con un código distinto.
+    if(!manual){
+      if(codigoDosPasosEnviadoPara === email) return;
+      codigoDosPasosEnviadoPara = email;
+    }
     try{
       await httpsCallable(functionsInstance, 'enviarCodigo2FA')();
-      codigoDosPasosEnviadoPara = email;
       if(manual) toast('Te reenviamos el código');
-    }catch(e){ toast('No se pudo enviar el código: '+(e.code||e.message||''), true); }
+    }catch(e){
+      if(!manual) codigoDosPasosEnviadoPara = null;
+      toast('No se pudo enviar el código: '+(e.code||e.message||''), true);
+    }
   }
 
   function showConfirmacionDosPasos(){
