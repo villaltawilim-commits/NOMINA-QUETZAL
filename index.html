@@ -369,12 +369,12 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/fireba
 import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail,
-  EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification,
-  sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink
+  EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-functions.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAFePSvFSCU-uhWclhsxkKo7qXJLpPd1BA",
@@ -392,6 +392,7 @@ initializeAppCheck(fbApp, {
 });
 const auth = getAuth(fbApp);
 const firestore = getFirestore(fbApp);
+const functionsInstance = getFunctions(fbApp, 'us-central1');
 
 function buildDbShim(fsDb){
   function wrapSnap(s){ return { id: s.id, exists: s.exists(), data: function(){ return s.data(); } }; }
@@ -1211,21 +1212,18 @@ function buildDbShim(fsDb){
     document.getElementById('vc-salir').addEventListener('click', function(){ signOut(auth); });
   }
 
-  // Verificación en dos pasos por correo (solo superadmin): en vez de una app autenticadora,
-  // se envía un enlace de confirmación de Firebase al correo real de la cuenta. Al abrirlo (en
-  // el mismo navegador o en otro) se marca la confirmación en Firestore para que la pestaña que
-  // está esperando pueda continuar sola, sin que la persona tenga que volver a esa pestaña.
-  var dosPasosUnsub = null;
-  var enlaceDosPasosEnviadoPara = null;
+  // Verificación en dos pasos por correo (solo superadmin): se envía un código de 6 dígitos por
+  // correo (Cloud Function + Gmail) y se escribe en la misma pantalla, sin importar en qué
+  // dispositivo se lea el correo — no requiere abrir ningún enlace ni usar el mismo navegador.
+  var codigoDosPasosEnviadoPara = null;
 
-  async function enviarEnlaceDosPasos(manual){
+  async function enviarCodigoDosPasos(manual){
     var email = state.authUser.email;
     try{
-      await sendSignInLinkToEmail(auth, email, { url: 'https://nominagt.com/', handleCodeInApp: true });
-      try{ localStorage.setItem('emailDosPasos2FA', email); }catch(e0){}
-      enlaceDosPasosEnviadoPara = email;
-      if(manual) toast('Te reenviamos el enlace de confirmación');
-    }catch(e){ toast('No se pudo enviar el enlace: '+(e.code||''), true); }
+      await httpsCallable(functionsInstance, 'enviarCodigo2FA')();
+      codigoDosPasosEnviadoPara = email;
+      if(manual) toast('Te reenviamos el código');
+    }catch(e){ toast('No se pudo enviar el código: '+(e.code||e.message||''), true); }
   }
 
   function showConfirmacionDosPasos(){
@@ -1234,43 +1232,26 @@ function buildDbShim(fsDb){
       '<div class="mark-big">🧾 Nómina Quetzal</div>' +
       '<p class="tag">Verificación en dos pasos</p>' +
       '<div class="auth-card">' +
-        '<p style="margin:0 0 14px;">Te enviamos un enlace de confirmación a <strong>'+esc(email)+'</strong>. Ábrelo (en este navegador o en cualquier dispositivo) para continuar — esta pantalla se va a actualizar sola.</p>' +
-        '<button class="btn btn-secondary btn-block" id="dp-reenviar">Reenviar enlace</button>' +
+        '<p style="margin:0 0 14px;">Te enviamos un código de 6 dígitos a <strong>'+esc(email)+'</strong>. Escríbelo aquí abajo.</p>' +
+        '<div class="field"><label for="dp-codigo">Código</label><input id="dp-codigo" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"/></div>' +
+        '<button class="btn btn-primary btn-block" id="dp-confirmar">Confirmar</button>' +
+        '<button class="btn btn-secondary btn-block" id="dp-reenviar" style="margin-top:8px;">Reenviar código</button>' +
         '<button class="btn btn-ghost btn-block" id="dp-salir" style="margin-top:8px;">Cerrar sesión</button>' +
       '</div>'
     );
-    document.getElementById('dp-reenviar').addEventListener('click', function(){ enviarEnlaceDosPasos(true); });
+    document.getElementById('dp-confirmar').addEventListener('click', async function(){
+      var codigo = document.getElementById('dp-codigo').value.trim();
+      if(!/^\d{6}$/.test(codigo)){ toast('Escribe el código de 6 dígitos', true); return; }
+      try{
+        await httpsCallable(functionsInstance, 'verificarCodigo2FA')({ codigo: codigo });
+        marcarDosPasosConfirmado();
+        checkProfileAndRender();
+      }catch(e){ toast(e.message || 'Código incorrecto', true); }
+    });
+    document.getElementById('dp-reenviar').addEventListener('click', function(){ enviarCodigoDosPasos(true); });
     document.getElementById('dp-salir').addEventListener('click', function(){ signOut(auth); });
 
-    if(enlaceDosPasosEnviadoPara !== email){ enviarEnlaceDosPasos(false); }
-
-    if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
-    var miUid = state.authUser.uid;
-    dosPasosUnsub = state.db.collection('confirmaciones2FA').doc(miUid).onSnapshot(function(snap){
-      // Es de un solo uso: en cuanto se detecta, se borra enseguida para que no sirva en un
-      // inicio de sesión futuro (antes se quedaba para siempre y dejaba entrar sin confirmar).
-      if(snap.exists){
-        marcarDosPasosConfirmado();
-        if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
-        state.db.collection('confirmaciones2FA').doc(miUid).delete().catch(function(){});
-        checkProfileAndRender();
-      }
-    });
-  }
-
-  async function manejarEnlaceDosPasosSiAplica(){
-    try{
-      if(!isSignInWithEmailLink(auth, window.location.href)) return;
-      var email = null;
-      try{ email = localStorage.getItem('emailDosPasos2FA'); }catch(e0){}
-      if(!email){ toast('Abre este enlace en el mismo navegador donde iniciaste sesión', true); return; }
-      var result = await signInWithEmailLink(auth, email, window.location.href);
-      try{ localStorage.removeItem('emailDosPasos2FA'); }catch(e1){}
-      history.replaceState(null, '', window.location.pathname);
-      marcarDosPasosConfirmado();
-      try{ await state.db.collection('confirmaciones2FA').doc(result.user.uid).set({ confirmadoEn: new Date().toISOString() }); }catch(e2){}
-      checkProfileAndRender();
-    }catch(e){ toast('No se pudo confirmar el enlace: '+(e.code||''), true); }
+    if(codigoDosPasosEnviadoPara !== email){ enviarCodigoDosPasos(false); }
   }
 
   function dosPasosConfirmadoEnEstaSesion(){
@@ -1310,8 +1291,7 @@ function buildDbShim(fsDb){
     } else {
       var uidSaliente = state.authUser && state.authUser.uid;
       try{ if(uidSaliente) sessionStorage.removeItem('dosPasosOk_' + uidSaliente); }catch(e0){}
-      if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
-      enlaceDosPasosEnviadoPara = null;
+      codigoDosPasosEnviadoPara = null;
       teardownFirestoreListeners();
       state.authUser = null;
       state.session = null;
@@ -1323,8 +1303,6 @@ function buildDbShim(fsDb){
       showLoginScreen();
     }
   });
-
-  manejarEnlaceDosPasosSiAplica();
 
   function updateHeaderIdentity(){
     document.getElementById('header-avatar').textContent = initials(state.session.nombre);
