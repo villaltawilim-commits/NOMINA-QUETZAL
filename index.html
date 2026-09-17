@@ -895,20 +895,32 @@ function buildDbShim(fsDb){
     var db = state.db;
     var idsAcotados = ids.slice(0, 10); // límite de Firestore para consultas 'in' / 'array-contains-any'
 
+    // Justo después de crear una empresa (o recibir acceso a una), puede pasar un instante
+    // muy breve en el que el servidor de reglas todavía no "ve" el nuevo permiso: si eso pasa,
+    // reintentamos una vez en silencio en lugar de asustar al usuario con un error pasajero.
+    function reintentarSiEsTransitorio(err, mensajeError){
+      if(err && err.code === 'permission-denied' && key === misEmpresasIdsCacheKey){
+        misEmpresasIdsCacheKey = null;
+        setTimeout(actualizarSuscripcionesPorAcceso, 900);
+        return;
+      }
+      if(state.authUser) toast(mensajeError + err.code, true);
+    }
+
     unsubscribesAcceso.push(db.collection('empresas').where(db.documentId(), 'in', idsAcotados).onSnapshot(function(snap){
       state.empresas = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empresas: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar empresas: '); }));
 
     unsubscribesAcceso.push(db.collection('equipo').where('empresasAcceso','array-contains-any', idsAcotados).onSnapshot(function(snap){
       state.equipo = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       checkProfileAndRender();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar el equipo: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar el equipo: '); }));
 
     unsubscribesAcceso.push(db.collection('empleados').where('empresaId','in', idsAcotados).onSnapshot(function(snap){
       state.empleadosMultiEmpresa = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados (multi-empresa): ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar empleados (multi-empresa): '); }));
   }
 
   function actualizarSuscripcionesEmpresa(){
@@ -923,45 +935,56 @@ function buildDbShim(fsDb){
     if(!id) return;
     var db = state.db;
 
+    // Igual que en actualizarSuscripcionesPorAcceso: justo tras crear/recibir acceso a una empresa
+    // puede haber un instante muy breve de desfase antes de que el servidor vea el permiso nuevo.
+    function reintentarSiEsTransitorio(err, mensajeError){
+      if(err && err.code === 'permission-denied' && id === empresaActualIdCache){
+        empresaActualIdCache = undefined;
+        setTimeout(actualizarSuscripcionesEmpresa, 900);
+        return;
+      }
+      if(state.authUser) toast(mensajeError + err.code, true);
+    }
+
     unsubscribesEmpresa.push(db.collection('empleados').where('empresaId','==', id).onSnapshot(function(snap){
       state.empleados = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar empleados: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar empleados: '); }));
 
     unsubscribesEmpresa.push(db.collection('pagos').where('empresaId','==', id).orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
       state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar pagos: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar pagos: '); }));
 
     unsubscribesEmpresa.push(db.collection('prestamos').where('empresaId','==', id).onSnapshot(function(snap){
       state.prestamos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar préstamos: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar préstamos: '); }));
 
     unsubscribesEmpresa.push(db.collection('comisiones').where('empresaId','==', id).orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
       state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar comisiones: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar comisiones: '); }));
 
     unsubscribesEmpresa.push(db.collection('documentos').where('empresaId','==', id).orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
       state.documentos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar documentos: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar documentos: '); }));
 
     unsubscribesEmpresa.push(db.collection('licencias').doc(id).onSnapshot(function(snap){
       state.licencia = snap.exists ? Object.assign({id:snap.id}, snap.data()) : null;
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar la licencia: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar la licencia: '); }));
 
     unsubscribesEmpresa.push(db.collection('invitaciones').where('empresaId','==', id).onSnapshot(function(snap){
       state.invitaciones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar invitaciones: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar invitaciones: '); }));
 
     unsubscribesEmpresa.push(db.collection('vacaciones').where('empresaId','==', id).onSnapshot(function(snap){
       state.vacaciones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
-    }, function(err){ if(state.authUser) toast('No se pudo sincronizar vacaciones: ' + err.code, true); }));
+    }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar vacaciones: '); }));
   }
 
   function teardownFirestoreListeners(){
