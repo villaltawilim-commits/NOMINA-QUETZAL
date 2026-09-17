@@ -368,7 +368,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail,
-  EmailAuthProvider, reauthenticateWithCredential
+  EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
@@ -993,7 +993,10 @@ function buildDbShim(fsDb){
       var pass = document.getElementById('cc-pass').value;
       if(!email || !pass){ toast('Escribe tu correo y contraseña', true); return; }
       if(pass.length < 6){ toast('La contraseña debe tener al menos 6 caracteres', true); return; }
-      try{ await createUserWithEmailAndPassword(auth, email, pass); }
+      try{
+        await createUserWithEmailAndPassword(auth, email, pass);
+        try{ await sendEmailVerification(auth.currentUser); }catch(e2){}
+      }
       catch(e){
         var msg = e.code === 'auth/email-already-in-use' ? 'Ese correo ya tiene una cuenta, mejor inicia sesión' : 'No se pudo crear la cuenta: '+(e.code||'');
         toast(msg, true);
@@ -1067,6 +1070,32 @@ function buildDbShim(fsDb){
     document.getElementById('cd-salir').addEventListener('click', function(){ signOut(auth); });
   }
 
+  function showVerificarCorreo(){
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Verifica tu correo</p>' +
+      '<div class="auth-card">' +
+        '<p style="margin:0 0 14px;">Te enviamos un enlace de verificación a <strong>'+esc(state.authUser.email)+'</strong>. Ábrelo y luego vuelve aquí.</p>' +
+        '<button class="btn btn-primary btn-block" id="vc-ya">Ya verifiqué mi correo</button>' +
+        '<button class="btn btn-secondary btn-block" id="vc-reenviar" style="margin-top:8px;">Reenviar correo</button>' +
+        '<button class="btn btn-ghost btn-block" id="vc-salir" style="margin-top:8px;">Cerrar sesión</button>' +
+      '</div>'
+    );
+    document.getElementById('vc-ya').addEventListener('click', async function(){
+      try{
+        await auth.currentUser.reload();
+        state.authUser.emailVerified = auth.currentUser.emailVerified;
+        if(!state.authUser.emailVerified){ toast('Todavía no aparece verificado, revisa tu correo', true); return; }
+        checkProfileAndRender();
+      }catch(e){ toast('No se pudo comprobar: '+(e.code||''), true); }
+    });
+    document.getElementById('vc-reenviar').addEventListener('click', async function(){
+      try{ await sendEmailVerification(auth.currentUser); toast('Correo reenviado'); }
+      catch(e){ toast('No se pudo reenviar: '+(e.code||''), true); }
+    });
+    document.getElementById('vc-salir').addEventListener('click', function(){ signOut(auth); });
+  }
+
   function checkProfileAndRender(){
     if(!state.authUser) return;
     if(state.miEquipoDoc === undefined) return; // aún no llega nuestro propio documento
@@ -1080,12 +1109,13 @@ function buildDbShim(fsDb){
       return;
     }
     state.session = null;
+    if(!state.authUser.emailVerified){ showVerificarCorreo(); return; }
     showCrearPerfilPrimerUsuario();
   }
 
   onAuthStateChanged(auth, function(user){
     if(user){
-      state.authUser = { uid: user.uid, email: user.email };
+      state.authUser = { uid: user.uid, email: user.email, emailVerified: user.emailVerified };
       initFirestoreListeners();
       checkProfileAndRender();
     } else {
