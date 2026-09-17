@@ -499,6 +499,27 @@ function buildDbShim(fsDb){
     });
   }
 
+  // Para activar/desactivar 2FA, Firebase exige un login "reciente" (unos minutos), sin importar
+  // el caché de 15 min que usamos para licencias. Por eso aquí siempre se pide la contraseña de nuevo.
+  function requireFreshAuth(onOk){
+    var body =
+      '<div class="field"><label for="reauth-pass">Contraseña</label><input id="reauth-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>' +
+      '<p class="disclaimer">Por seguridad, confirma tu contraseña justo antes de este paso.</p>' +
+      '<button class="btn btn-primary btn-block" id="reauth-submit">Confirmar</button>';
+    openSheet('Confirma tu identidad', body, function(root){
+      root.querySelector('#reauth-submit').addEventListener('click', async function(){
+        var pass = root.querySelector('#reauth-pass').value;
+        if(!pass){ toast('Escribe tu contraseña', true); return; }
+        try{
+          var cred = EmailAuthProvider.credential(state.authUser.email, pass);
+          await reauthenticateWithCredential(auth.currentUser, cred);
+          closeSheet();
+          onOk();
+        }catch(e){ toast('Contraseña incorrecta', true); }
+      });
+    });
+  }
+
   function round2(n){ return Math.round((Number(n)||0) * 100) / 100; }
   function round4(n){ return Math.round((Number(n)||0) * 10000) / 10000; }
   function fmtPctNum(fraccion){ return Math.round((Number(fraccion)||0) * 10000) / 100; }
@@ -3494,8 +3515,8 @@ function buildDbShim(fsDb){
         '<button class="btn '+(activa?'btn-danger':'btn-primary')+'" id="2fa-toggle-btn" style="flex:none;">'+(activa?'Desactivar':'Activar')+'</button>' +
       '</div>';
     document.getElementById('2fa-toggle-btn').addEventListener('click', function(){
-      if(activa) requireLicenciaAuth(desactivar2FA);
-      else requireLicenciaAuth(openEnrolar2FA);
+      if(activa) requireFreshAuth(desactivar2FA);
+      else requireFreshAuth(openEnrolar2FA);
     });
   }
 
@@ -3507,7 +3528,10 @@ function buildDbShim(fsDb){
       await multiFactor(auth.currentUser).unenroll(factores[0]);
       toast('Verificación en dos pasos desactivada');
       renderSeguridadCuenta();
-    }catch(e){ toast('No se pudo desactivar: '+(e.code||''), true); }
+    }catch(e){
+      if(e.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió, confirma tu contraseña de nuevo e inténtalo enseguida', true); return; }
+      toast('No se pudo desactivar: '+(e.code||''), true);
+    }
   }
 
   async function openEnrolar2FA(){
@@ -3543,10 +3567,16 @@ function buildDbShim(fsDb){
             await multiFactor(auth.currentUser).enroll(assertion, 'App autenticadora');
             toast('Verificación en dos pasos activada'); closeSheet();
             renderSeguridadCuenta();
-          }catch(e3){ toast('Código incorrecto o expirado', true); }
+          }catch(e3){
+            if(e3.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió mientras llenabas esto, confirma tu contraseña de nuevo e ingresa el código enseguida', true); closeSheet(); return; }
+            toast('Código incorrecto o expirado', true);
+          }
         });
       });
-    }catch(e){ toast('No se pudo iniciar la activación: '+(e.code||''), true); }
+    }catch(e){
+      if(e.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió, confirma tu contraseña de nuevo e inténtalo enseguida', true); return; }
+      toast('No se pudo iniciar la activación: '+(e.code||''), true);
+    }
   }
 
   function openAsignarActualizacion(feature, empresas, licPorId){
