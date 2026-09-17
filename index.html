@@ -2025,7 +2025,8 @@ function buildDbShim(fsDb){
 
     el.innerHTML =
       '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId;}).length+' pagos registrados</p></div>' +
-      '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:12px;">Exportar reporte (PDF / Excel)</button>' +
+      '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:8px;">Exportar reporte (PDF / Excel)</button>' +
+      '<button class="btn btn-secondary btn-block" id="reporte-anual-btn" style="margin-bottom:12px;">Reporte anual IGSS / ISR</button>' +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="pago-search" placeholder="Buscar por empleado" value="'+esc(state.filters.pagosQuery)+'"/></div>' +
       '<div class="filter-chips">' +
         chip('todos','Todos') + chip('pagado','Pagados') + chip('pendiente','Pendientes') +
@@ -2037,6 +2038,7 @@ function buildDbShim(fsDb){
     document.getElementById('pago-search').addEventListener('input', function(e){ state.filters.pagosQuery = e.target.value; renderNomina(); });
     el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
     document.getElementById('exportar-nomina-btn').addEventListener('click', openExportarNomina);
+    document.getElementById('reporte-anual-btn').addEventListener('click', openReporteAnualFiscal);
 
     var wrap = document.getElementById('pagos-wrap');
     if(list.length === 0){
@@ -2199,6 +2201,108 @@ function buildDbShim(fsDb){
     html2pdf().set({
       margin: 0,
       filename: ('Nomina '+empresaActual().nombre+' '+etiquetaPeriodo).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(elPagina).save().then(function(){
+      document.body.removeChild(contenedor);
+      toast('PDF descargado');
+    }).catch(function(){
+      document.body.removeChild(contenedor);
+      toast('No se pudo generar el PDF', true);
+    });
+  }
+
+  /* ---------- Reporte anual de IGSS / ISR (para declaraciones) ---------- */
+  function calcularReporteAnualFiscal(anio){
+    var pagosAnio = state.pagos.filter(function(p){
+      return p.empresaId === state.empresaActualId && p.estado === 'pagado' && (p.fechaPago||'').slice(0,4) === String(anio);
+    });
+    var porEmpleado = {};
+    pagosAnio.forEach(function(p){
+      var key = p.empleadoId || p.empleadoNombre;
+      if(!porEmpleado[key]) porEmpleado[key] = { nombre: p.empleadoNombre, bruto:0, igss:0, isr:0, neto:0, pagos:0 };
+      porEmpleado[key].bruto += Number(p.salarioBruto)||0;
+      porEmpleado[key].igss += Number(p.igss)||0;
+      porEmpleado[key].isr += Number(p.isr)||0;
+      porEmpleado[key].neto += Number(p.totalNeto)||0;
+      porEmpleado[key].pagos += 1;
+    });
+    return Object.keys(porEmpleado).map(function(k){
+      var d = porEmpleado[k];
+      d.bruto = round2(d.bruto); d.igss = round2(d.igss); d.isr = round2(d.isr); d.neto = round2(d.neto);
+      return d;
+    }).sort(function(a,b){ return a.nombre.localeCompare(b.nombre); });
+  }
+
+  function openReporteAnualFiscal(){
+    var anioActual = new Date().getFullYear();
+    var body =
+      '<div class="field"><label for="raf-anio">Año</label><input id="raf-anio" type="number" min="2000" max="2100" step="1" value="'+anioActual+'"/></div>' +
+      '<p class="hint">Suma el IGSS y el ISR retenido a cada empleado durante todo el año, con base en los pagos ya marcados como pagados.</p>' +
+      '<button class="btn btn-primary btn-block" id="raf-csv" style="margin-top:6px;">Descargar Excel (CSV)</button>' +
+      '<button class="btn btn-secondary btn-block" id="raf-pdf" style="margin-top:8px;">Descargar PDF</button>';
+    openSheet('Reporte anual IGSS / ISR', body, function(root){
+      root.querySelector('#raf-csv').addEventListener('click', function(){
+        var anio = parseInt(root.querySelector('#raf-anio').value,10);
+        var datos = calcularReporteAnualFiscal(anio);
+        if(datos.length === 0){ toast('No hay pagos en '+anio, true); return; }
+        var headers = ['Empleado','Pagos en el año','Salario bruto acumulado','IGSS acumulado','ISR acumulado','Total líquido acumulado'];
+        var filas = datos.map(function(d){ return [d.nombre, d.pagos, d.bruto, d.igss, d.isr, d.neto]; });
+        var csv = '﻿' + [headers].concat(filas).map(function(f){ return f.map(csvCelda).join(','); }).join('\r\n');
+        descargarArchivo('Reporte anual IGSS-ISR '+esc(empresaActual().nombre)+' '+anio+'.csv', csv, 'text/csv;charset=utf-8;');
+        toast('Descargado'); closeSheet();
+      });
+      root.querySelector('#raf-pdf').addEventListener('click', function(){
+        var anio = parseInt(root.querySelector('#raf-anio').value,10);
+        var datos = calcularReporteAnualFiscal(anio);
+        if(datos.length === 0){ toast('No hay pagos en '+anio, true); return; }
+        generarPDFReporteAnual(datos, anio);
+        closeSheet();
+      });
+    });
+  }
+
+  function generarPDFReporteAnual(datos, anio){
+    if(!window.html2pdf){ toast('No se pudo cargar el generador de PDF, revisa tu conexión e intenta de nuevo', true); return; }
+    var totalIgss = round2(datos.reduce(function(s,d){ return s + d.igss; }, 0));
+    var totalIsr = round2(datos.reduce(function(s,d){ return s + d.isr; }, 0));
+    var totalBruto = round2(datos.reduce(function(s,d){ return s + d.bruto; }, 0));
+    var totalNeto = round2(datos.reduce(function(s,d){ return s + d.neto; }, 0));
+    var filasHtml = datos.map(function(d){
+      return '<tr><td>'+esc(d.nombre)+'</td><td class="num">'+d.pagos+'</td><td class="num">'+fmtQ(d.bruto)+'</td>' +
+        '<td class="num">'+fmtQ(d.igss)+'</td><td class="num">'+fmtQ(d.isr)+'</td><td class="num">'+fmtQ(d.neto)+'</td></tr>';
+    }).join('');
+    var estilos =
+      '*{ box-sizing:border-box; }' +
+      '.pdf-page{ background:#fff; font-family:"IBM Plex Sans",Arial,sans-serif; color:#161616; width:11in; min-height:8.5in; padding:1.5cm; }' +
+      '.pdf-page h1{ font-size:1.2rem; margin:0 0 4px; }' +
+      '.pdf-page .sub{ color:#555; font-size:.85rem; margin-bottom:16px; }' +
+      '.pdf-page table{ width:100%; border-collapse:collapse; font-size:.82rem; }' +
+      '.pdf-page th{ text-align:left; border-bottom:2px solid #111; padding:6px 14px 6px 4px; }' +
+      '.pdf-page td{ padding:5px 14px 5px 4px; border-bottom:1px solid #ddd; }' +
+      '.pdf-page td.num, .pdf-page th.num{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:8px; }';
+    var contenidoHtml =
+      '<h1>Reporte anual IGSS / ISR — '+esc(empresaActual().nombre||'')+'</h1>' +
+      '<div class="sub">Año '+anio+' · '+datos.length+' empleado(s) con pagos</div>' +
+      '<table><thead><tr><th>Empleado</th><th class="num">Pagos</th><th class="num">Bruto</th><th class="num">IGSS</th><th class="num">ISR</th><th class="num">Neto</th></tr></thead>' +
+      '<tbody>' + filasHtml + '</tbody>' +
+      '<tfoot><tr class="total"><td colspan="2">TOTAL</td><td class="num">'+fmtQ(totalBruto)+'</td><td class="num">'+fmtQ(totalIgss)+'</td><td class="num">'+fmtQ(totalIsr)+'</td><td class="num">'+fmtQ(totalNeto)+'</td></tr></tfoot>' +
+      '</table>';
+    var contenedor = document.createElement('div');
+    contenedor.style.position = 'fixed';
+    contenedor.style.left = '-10000px';
+    contenedor.style.top = '0';
+    contenedor.style.width = '11in';
+    contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenidoHtml + '</div>';
+    document.body.appendChild(contenedor);
+    var elPagina = contenedor.querySelector('.pdf-page');
+    toast('Generando PDF…');
+    html2pdf().set({
+      margin: 0,
+      filename: ('Reporte anual IGSS-ISR '+empresaActual().nombre+' '+anio).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' },
