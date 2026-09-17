@@ -1225,7 +1225,7 @@ function buildDbShim(fsDb){
       el.innerHTML =
         '<div class="empty-state" style="margin-top:40px;"><div class="display">Aún no tienes ninguna empresa</div>' +
         'Ve a la pestaña <strong>Equipo</strong>, busca la sección <strong>Empresas</strong> y dale clic a <strong>+ Nueva</strong>. Escribe el nombre de tu empresa y créala.<br><br>' +
-        'Una vez creada, comunícate con el proveedor del sistema ('+esc(CONTACTO_SOPORTE)+') para que te active la licencia.</div>';
+        'Una vez creada, comunícate con el proveedor del sistema para que te active la licencia.</div>';
       return;
     }
     var admins = state.equipo.filter(function(m){ return m.rol === 'administrador' && m.activo !== false; });
