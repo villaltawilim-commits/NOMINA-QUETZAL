@@ -3512,6 +3512,15 @@ function buildDbShim(fsDb){
 
   async function openEnrolar2FA(){
     try{
+      await auth.currentUser.reload();
+      await auth.currentUser.getIdToken(true);
+      if(!auth.currentUser.emailVerified){
+        if(confirm('Tu correo no aparece verificado, lo cual es necesario para activar la verificación en dos pasos. ¿Reenviamos el correo de verificación ahora?')){
+          try{ await sendEmailVerification(auth.currentUser); toast('Te enviamos un correo de verificación. Ábrelo y luego vuelve a intentar activar el 2FA.'); }
+          catch(e0){ toast('No se pudo enviar el correo: '+(e0.code||''), true); }
+        }
+        return;
+      }
       var session = await multiFactor(auth.currentUser).getSession();
       var secret = await TotpMultiFactorGenerator.generateSecret(session);
       var appName = 'NominaQuetzal';
