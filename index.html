@@ -3237,7 +3237,7 @@ function buildDbShim(fsDb){
     var limiteAlcanzado = usadosUsuarios >= maxUsuarios;
     el.innerHTML =
       '<div class="view-head"><h1>Equipo</h1><p>Usuarios, empresas y roles dentro de la app</p></div>' +
-      '<div class="banner">Cada empresa solo ve sus propios datos. Para agregar una persona a tu equipo, genera un código de invitación y compárteselo: al iniciar sesión por primera vez (con una cuenta creada en Firebase Authentication) lo usará para unirse directamente a tu empresa.</div>' +
+      '<div class="banner">Cada empresa solo ve sus propios datos. Para agregar una persona a tu equipo, genera un código de invitación y compárteselo: al crear su cuenta por primera vez lo usará para unirse directamente a tu empresa.</div>' +
       '<div class="section-title" style="margin-top:0;"><h2>Empresas</h2><button class="link-btn" id="add-empresa">+ Nueva</button></div>' +
       '<div class="ledger" id="empresas-wrap"></div>' +
       '<div class="section-title"><h2>Invitar a mi equipo</h2><button class="link-btn" id="gen-invitacion" '+(state.empresaActualId && !limiteAlcanzado?'':'disabled')+'>+ Generar código</button></div>' +
