@@ -435,6 +435,10 @@ function buildDbShim(fsDb){
   var DEFAULT_BONIFICACION = 250;
   var MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
+  // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
+  // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
+  var APP_VERSION = '1.0';
+  var versionAutoRegistrada = false;
   var CONTACTO_SOPORTE = 'villaltawilim@gmail.com';
   function esSuperadmin(){
     return !!(state.authUser && state.authUser.email && SUPERADMIN_EMAILS.indexOf(state.authUser.email.toLowerCase()) > -1);
@@ -1207,9 +1211,35 @@ function buildDbShim(fsDb){
   }
 
   // Para mejoras que solo deben verse en las empresas que el superadmin haya elegido
-  // desde Licencias -> Actualizaciones. Uso: if(tieneFeatureHabilitada('idDeLaFeature')){ ... }
+  // desde Licencias -> Versiones. Uso: if(tieneFeatureHabilitada('1.3')){ ... } o tieneFeatureHabilitada(APP_VERSION)
   function tieneFeatureHabilitada(featureId){
     return !!(state.licencia && state.licencia.featuresHabilitadas && state.licencia.featuresHabilitadas[featureId] === true);
+  }
+
+  // Ordena versiones tipo "1.3" de más nueva a más vieja (compara mayor.menor como números).
+  function compararVersiones(a, b){
+    var pa = String(a.id||a).split('.').map(Number);
+    var pb = String(b.id||b).split('.').map(Number);
+    if(pa[0] !== pb[0]) return pb[0] - pa[0];
+    return (pb[1]||0) - (pa[1]||0);
+  }
+
+  // Cada vez que se publica una versión nueva de la app (se sube APP_VERSION en el código),
+  // el propio superadmin la detecta sola al entrar a Licencias y la registra, activándola
+  // de una vez en sus propias empresas para probarla antes de dársela a los clientes.
+  async function autoRegistrarVersionActual(){
+    if(versionAutoRegistrada) return;
+    if(state.featuresAdmin.some(function(f){ return f.id === APP_VERSION; })){ versionAutoRegistrada = true; return; }
+    versionAutoRegistrada = true;
+    try{
+      await state.db.collection('features').doc(APP_VERSION).set({ nombre: 'Versión '+APP_VERSION, version: APP_VERSION, creadoEn: new Date().toISOString() });
+      var misEmpresas = empresasAccesibles();
+      for(var i=0;i<misEmpresas.length;i++){
+        var campo = {};
+        campo['featuresHabilitadas.' + APP_VERSION] = true;
+        await state.db.collection('licencias').doc(misEmpresas[i].id).set(campo, { merge: true });
+      }
+    }catch(e){ versionAutoRegistrada = false; }
   }
 
   // Límite de usuarios por empresa: 2 incluidos por defecto, ampliable desde Licencias (maxUsuarios).
@@ -2890,6 +2920,13 @@ function buildDbShim(fsDb){
     state.todasLicenciasAdmin.forEach(function(l){ licPorId[l.id] = l; });
     var hoy = todayISO();
     var codigosPendientes = state.codigosEmpresaAdmin.filter(function(c){ return !c.usado; });
+
+    autoRegistrarVersionActual();
+    var versiones = state.featuresAdmin.slice().sort(compararVersiones);
+    var ultimaVersion = versiones[0];
+    var ultimaVersionPendiente = !!(ultimaVersion && empresas.length > 0 &&
+      empresas.filter(function(em){ var l = licPorId[em.id]; return l && l.featuresHabilitadas && l.featuresHabilitadas[ultimaVersion.id]; }).length < empresas.length);
+
     el.innerHTML =
       '<div class="view-head"><h1>Licencias</h1><p>Activa o pausa el acceso de cada empresa cliente</p></div>' +
       '<div class="ledger" id="licencias-wrap"></div>' +
@@ -2902,11 +2939,14 @@ function buildDbShim(fsDb){
             '<button class="icon-btn ce-borrar" data-id="'+c.id+'" title="Eliminar código"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
         }).join('') + '</div>'
       ) +
-      '<div class="section-title"><h2>Actualizaciones (solo tú)</h2><button class="link-btn" id="nueva-actualizacion">+ Nueva</button></div>' +
-      '<p class="hint" style="margin-top:-6px;">Cuando agregues una mejora nueva a la app, regístrala aquí y elige a qué empresas dársela.</p>' +
+      '<div class="section-title"><h2>Versiones de la app (solo tú)</h2></div>' +
+      (ultimaVersionPendiente ?
+        '<div class="banner" style="font-weight:600;">🆕 Tenemos una nueva actualización: <strong>'+esc(ultimaVersion.nombre)+'</strong>' +
+          '<button class="btn btn-primary btn-block" id="ver-nueva-version" style="margin-top:8px;">¿A qué empresas se la aplicamos?</button></div>'
+        : '') +
       '<div class="ledger" id="features-wrap">' +
-        (state.featuresAdmin.length === 0 ? '<div class="empty-state">Sin actualizaciones registradas</div>' :
-          state.featuresAdmin.slice().sort(function(a,b){ return (b.creadoEn||'').localeCompare(a.creadoEn||''); }).map(function(f){
+        (versiones.length === 0 ? '<div class="empty-state">Aún no se ha detectado ninguna versión</div>' :
+          versiones.map(function(f){
             var n = empresas.filter(function(em){ var l = licPorId[em.id]; return l && l.featuresHabilitadas && l.featuresHabilitadas[f.id]; }).length;
             return '<button class="ledger-row" data-id="'+f.id+'">' +
               '<span class="status-bar'+(n>0?' good':'')+'"></span>' +
@@ -2949,34 +2989,10 @@ function buildDbShim(fsDb){
       });
     });
 
-    document.getElementById('nueva-actualizacion').addEventListener('click', openNuevaActualizacion);
-    wireLedgerRows(document.getElementById('features-wrap'), state.featuresAdmin, function(f){
+    var verNuevaBtn = document.getElementById('ver-nueva-version');
+    if(verNuevaBtn) verNuevaBtn.addEventListener('click', function(){ openAsignarActualizacion(ultimaVersion, empresas, licPorId); });
+    wireLedgerRows(document.getElementById('features-wrap'), versiones, function(f){
       openAsignarActualizacion(f, empresas, licPorId);
-    });
-  }
-
-  function openNuevaActualizacion(){
-    var body =
-      '<p class="hint" style="margin-top:0;">Al crearla, quedará activada de una vez solo en tus propias empresas, para que la pruebes tú primero. A los demás clientes se la das después, uno por uno, desde "Asignar".</p>' +
-      '<div class="field"><label for="fe-nombre">Nombre de la actualización</label><input id="fe-nombre" placeholder="Ej. Control de vacaciones"/></div>' +
-      '<div class="field"><label for="fe-desc">Descripción (opcional)</label><textarea id="fe-desc" placeholder="Para recordar de qué se trata"></textarea></div>' +
-      '<button class="btn btn-primary btn-block" id="fe-submit" style="margin-top:6px;">Registrar</button>';
-    openSheet('Nueva actualización', body, function(root){
-      root.querySelector('#fe-submit').addEventListener('click', async function(){
-        var nombre = root.querySelector('#fe-nombre').value.trim();
-        var descripcion = root.querySelector('#fe-desc').value.trim();
-        if(!nombre){ toast('Escribe el nombre de la actualización', true); return; }
-        try{
-          var featureRef = await state.db.collection('features').add({ nombre: nombre, descripcion: descripcion, creadoEn: new Date().toISOString() });
-          var misEmpresas = empresasAccesibles();
-          for(var i=0;i<misEmpresas.length;i++){
-            var campo = {};
-            campo['featuresHabilitadas.' + featureRef.id] = true;
-            await state.db.collection('licencias').doc(misEmpresas[i].id).set(campo, { merge: true });
-          }
-          toast('Actualización registrada y activada en tus empresas'); closeSheet();
-        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
-      });
     });
   }
 
