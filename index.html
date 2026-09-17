@@ -1423,12 +1423,14 @@ function buildDbShim(fsDb){
 
     el.innerHTML =
       '<div class="view-head"><h1>Empleados</h1><p>'+state.empleados.filter(function(e){return e.activo!==false && e.empresaId===state.empresaActualId;}).length+' activos</p></div>' +
+      '<button class="btn btn-secondary btn-block" id="importar-empleados-btn" style="margin-bottom:12px;">Importar desde Excel/CSV</button>' +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="emp-search" placeholder="Buscar por nombre o puesto" value="'+esc(state.filters.empleadosQuery)+'"/></div>' +
       '<div class="filter-chips"><button class="chip'+(state.filters.mostrarArchivados?' active':'')+'" id="chip-archivados">'+(state.filters.mostrarArchivados?'Ocultar archivados':'Mostrar archivados')+'</button></div>' +
       '<div id="empleados-wrap"></div>';
 
     document.getElementById('emp-search').addEventListener('input', function(e){ state.filters.empleadosQuery = e.target.value; renderEmpleados(); });
     document.getElementById('chip-archivados').addEventListener('click', function(){ state.filters.mostrarArchivados = !state.filters.mostrarArchivados; renderEmpleados(); });
+    document.getElementById('importar-empleados-btn').addEventListener('click', openImportarEmpleados);
 
     var wrap = document.getElementById('empleados-wrap');
     if(list.length === 0){
@@ -1455,6 +1457,130 @@ function buildDbShim(fsDb){
       row.addEventListener('click', function(){
         var item = list.find(function(x){ return x.id === row.dataset.id; });
         if(item) handler(item);
+      });
+    });
+  }
+
+  /* ---------- Importar empleados desde CSV/Excel ---------- */
+  function normalizarTexto(s){
+    return String(s==null?'':s).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  }
+  function parseCSV(texto){
+    if(texto.charCodeAt(0) === 0xFEFF) texto = texto.slice(1);
+    var filas = [], fila = [], campo = '', enComillas = false;
+    for(var i=0;i<texto.length;i++){
+      var c = texto[i];
+      if(enComillas){
+        if(c === '"'){ if(texto[i+1] === '"'){ campo += '"'; i++; } else { enComillas = false; } }
+        else { campo += c; }
+      } else {
+        if(c === '"'){ enComillas = true; }
+        else if(c === ',' || c === ';'){ fila.push(campo); campo = ''; }
+        else if(c === '\r'){ /* ignorar */ }
+        else if(c === '\n'){ fila.push(campo); filas.push(fila); fila = []; campo = ''; }
+        else { campo += c; }
+      }
+    }
+    if(campo !== '' || fila.length > 0){ fila.push(campo); filas.push(fila); }
+    return filas.filter(function(f){ return f.some(function(v){ return String(v).trim() !== ''; }); });
+  }
+  var CAMPOS_IMPORT_EMPLEADOS = [
+    { claves: ['nombre'], campo: 'nombre', requerido: true },
+    { claves: ['puesto'], campo: 'puesto' },
+    { claves: ['salario base','salariobase','salario'], campo: 'salarioBase', numero: true, requerido: true },
+    { claves: ['fecha ingreso','fechaingreso'], campo: 'fechaIngreso' },
+    { claves: ['dpi'], campo: 'dpi' },
+    { claves: ['telefono'], campo: 'telefono' },
+    { claves: ['direccion'], campo: 'direccion' },
+    { claves: ['fecha nacimiento','fechanacimiento'], campo: 'fechaNacimiento' },
+    { claves: ['cuenta bancaria','cuentabancaria'], campo: 'cuentaBancaria' },
+    { claves: ['igss activo','igssactivo'], campo: 'igssActivo', booleano: true },
+    { claves: ['isr activo','isractivo'], campo: 'isrActivo', booleano: true }
+  ];
+  function descargarPlantillaEmpleados(){
+    var encabezados = ['Nombre','Puesto','Salario Base','Fecha Ingreso','DPI','Telefono','Direccion','Fecha Nacimiento','Cuenta Bancaria','IGSS Activo','ISR Activo'];
+    var ejemplo = ['María López','Vendedora','4500','2026-01-15','1234567890101','5555-5555','Zona 1, Guatemala','1995-05-20','1234567890','SI','SI'];
+    var csv = '﻿' + [encabezados, ejemplo].map(function(fila){ return fila.map(csvCelda).join(','); }).join('\r\n');
+    descargarArchivo('Plantilla empleados.csv', csv, 'text/csv;charset=utf-8;');
+  }
+  function openImportarEmpleados(){
+    var body =
+      '<p class="hint" style="margin-top:0;">Sube un archivo CSV (puedes abrirlo y guardarlo desde Excel) con una fila por empleado. Solo Nombre y Salario Base son obligatorios.</p>' +
+      '<button class="btn btn-secondary btn-block" id="imp-plantilla" style="margin-bottom:14px;">Descargar plantilla CSV</button>' +
+      '<div class="field"><label for="imp-archivo">Archivo CSV</label><input id="imp-archivo" type="file" accept=".csv,text/csv"/></div>' +
+      '<div id="imp-previsualizacion"></div>' +
+      '<button class="btn btn-primary btn-block" id="imp-confirmar" style="margin-top:14px;" disabled>Importar</button>';
+    openSheet('Importar empleados', body, function(root){
+      var filasValidas = [];
+      root.querySelector('#imp-plantilla').addEventListener('click', descargarPlantillaEmpleados);
+      root.querySelector('#imp-archivo').addEventListener('change', function(e){
+        var file = e.target.files[0];
+        if(!file) return;
+        var reader = new FileReader();
+        reader.onload = function(ev){
+          var filas = parseCSV(String(ev.target.result));
+          if(filas.length < 2){ toast('El archivo no tiene datos', true); return; }
+          var encabezados = filas[0].map(normalizarTexto);
+          var mapaColumnas = CAMPOS_IMPORT_EMPLEADOS.map(function(def){
+            var idx = -1;
+            for(var i=0;i<encabezados.length;i++){ if(def.claves.indexOf(encabezados[i]) > -1){ idx = i; break; } }
+            return { def: def, idx: idx };
+          });
+          var faltantes = mapaColumnas.filter(function(m){ return m.def.requerido && m.idx === -1; }).map(function(m){ return m.def.campo; });
+          if(faltantes.length){
+            root.querySelector('#imp-previsualizacion').innerHTML = '<div class="banner" style="background:#FDECEC;color:#B3261E;">Falta la columna obligatoria: '+faltantes.join(', ')+'</div>';
+            root.querySelector('#imp-confirmar').disabled = true;
+            return;
+          }
+          filasValidas = [];
+          var errores = [];
+          for(var f=1; f<filas.length; f++){
+            var fila = filas[f];
+            var datos = {};
+            mapaColumnas.forEach(function(m){
+              if(m.idx === -1) return;
+              var valor = (fila[m.idx]||'').trim();
+              if(m.def.numero) datos[m.def.campo] = round2(valor.replace(/,/g,''));
+              else if(m.def.booleano){
+                var v = normalizarTexto(valor);
+                datos[m.def.campo] = v === '' ? true : (v !== 'no' && v !== 'false' && v !== '0');
+              }
+              else datos[m.def.campo] = valor;
+            });
+            if(!datos.nombre){ continue; }
+            if(!datos.salarioBase || datos.salarioBase <= 0){ errores.push('Fila '+(f+1)+': salario inválido'); continue; }
+            filasValidas.push(datos);
+          }
+          var resumen = '<div class="breakdown-row"><span>Empleados listos para importar</span><span class="amt">'+filasValidas.length+'</span></div>';
+          if(errores.length) resumen += '<div class="banner" style="background:#FFF4E5;color:#7A4A1A;margin-top:8px;">'+errores.join('<br>')+'</div>';
+          root.querySelector('#imp-previsualizacion').innerHTML =
+            '<div class="divider-label">Vista previa</div><div class="breakdown">'+resumen+'</div>' +
+            (filasValidas.length ? '<div class="ledger">' + filasValidas.slice(0,5).map(function(d){
+              return '<div class="ledger-row" style="cursor:default;"><span class="status-bar good"></span><span class="row-main"><span class="title">'+esc(d.nombre)+'</span><span class="sub">'+esc(d.puesto||'')+'</span></span><span class="amt">'+fmtQ(d.salarioBase)+'</span></div>';
+            }).join('') + (filasValidas.length>5 ? '<div class="empty-state">y '+(filasValidas.length-5)+' más…</div>' : '') + '</div>' : '');
+          root.querySelector('#imp-confirmar').disabled = filasValidas.length === 0;
+        };
+        reader.readAsText(file, 'UTF-8');
+      });
+      root.querySelector('#imp-confirmar').addEventListener('click', async function(){
+        var btn = root.querySelector('#imp-confirmar');
+        btn.disabled = true; btn.textContent = 'Importando…';
+        var exitosos = 0, fallidos = 0;
+        for(var i=0;i<filasValidas.length;i++){
+          try{
+            var d = filasValidas[i];
+            await state.db.collection('empleados').add({
+              nombre: d.nombre, puesto: d.puesto||'', salarioBase: d.salarioBase,
+              fechaIngreso: d.fechaIngreso||'', dpi: d.dpi||'', telefono: d.telefono||'',
+              direccion: d.direccion||'', fechaNacimiento: d.fechaNacimiento||'', cuentaBancaria: d.cuentaBancaria||'',
+              igssActivo: d.igssActivo !== false, isrActivo: d.isrActivo !== false,
+              activo: true, empresaId: state.empresaActualId,
+              creadoEn: new Date().toISOString(), creadoPor: state.session.nombre
+            });
+            exitosos++;
+          }catch(e){ fallidos++; }
+        }
+        toast(exitosos+' empleado(s) importado(s)'+(fallidos?', '+fallidos+' con error':'')); closeSheet();
       });
     });
   }
