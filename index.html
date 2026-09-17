@@ -1519,9 +1519,11 @@ function buildDbShim(fsDb){
     return meses.map(function(m){
       var pagosMes = state.pagos.filter(function(p){ return p.empleadoId === emp.id && p.estado === 'pagado' && (p.fechaPago||'').slice(0,7) === m.ym; });
       var comisionesMes = state.comisiones.filter(function(c){ return c.empleadoId === emp.id && (c.fecha||'').slice(0,7) === m.ym; });
+      var vacacionesPagadasMes = state.vacaciones.filter(function(v){ return v.empleadoId === emp.id && v.tipo === 'pagados' && (v.fecha||'').slice(0,7) === m.ym; });
       var salarioBrutoTotal = pagosMes.reduce(function(s,p){ return s + (Number(p.salarioBruto)||0); }, 0);
       var comisionesTotal = comisionesMes.reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
-      var totalPercibido = round2(salarioBrutoTotal + comisionesTotal);
+      var vacacionesPagadasTotal = vacacionesPagadasMes.reduce(function(s,v){ return s + (Number(v.monto)||0); }, 0);
+      var totalPercibido = round2(salarioBrutoTotal + comisionesTotal + vacacionesPagadasTotal);
 
       var igssTotal = pagosMes.reduce(function(s,p){ return s + (Number(p.igss)||0); }, 0);
       var isrTotal = pagosMes.reduce(function(s,p){ return s + (Number(p.isr)||0); }, 0);
@@ -1539,11 +1541,12 @@ function buildDbShim(fsDb){
       Object.keys(prestamosPorConcepto).forEach(function(k){ detalle.push({ label: 'Descuento por: '+k, monto: prestamosPorConcepto[k] }); });
 
       var totalNetoPagos = pagosMes.reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0);
-      var totalLiquido = round2(totalNetoPagos + comisionesTotal);
+      var totalLiquido = round2(totalNetoPagos + comisionesTotal + vacacionesPagadasTotal);
 
       return {
         etiqueta: m.etiqueta, totalPercibido: totalPercibido, detalle: detalle, totalLiquido: totalLiquido,
-        sinMovimientos: pagosMes.length === 0 && comisionesMes.length === 0
+        vacacionesPagadasTotal: round2(vacacionesPagadasTotal),
+        sinMovimientos: pagosMes.length === 0 && comisionesMes.length === 0 && vacacionesPagadasMes.length === 0
       };
     });
   }
@@ -1556,7 +1559,8 @@ function buildDbShim(fsDb){
       }
       return '<div class="divider-label" style="margin-top:16px;">'+esc(m.etiqueta.toUpperCase())+'</div>' +
         '<div class="breakdown">' +
-          '<div class="breakdown-row"><span>Total percibido (incl. comisiones)</span><span class="amt">'+fmtQ(m.totalPercibido)+'</span></div>' +
+          '<div class="breakdown-row"><span>Total percibido (incl. comisiones y vacaciones pagadas)</span><span class="amt">'+fmtQ(m.totalPercibido)+'</span></div>' +
+          (m.vacacionesPagadasTotal ? '<div class="breakdown-row"><span>· de las cuales, vacaciones pagadas</span><span class="amt">'+fmtQ(m.vacacionesPagadasTotal)+'</span></div>' : '') +
           m.detalle.map(function(d){ return '<div class="breakdown-row"><span>'+esc(d.label)+'</span><span class="amt">-'+fmtQ(d.monto)+'</span></div>'; }).join('') +
           '<div class="breakdown-row total"><span>Total líquido recibido</span><span class="amt">'+fmtQ(m.totalLiquido)+'</span></div>' +
         '</div>';
@@ -1570,12 +1574,13 @@ function buildDbShim(fsDb){
     return '<button class="ledger-row" data-id="'+v.id+'">' +
       '<span class="status-bar '+(esTomado?'good':'warning')+'"></span>' +
       '<span class="row-main"><span class="title">'+(esTomado?'Días tomados':'Días pagados')+'</span><span class="sub">'+esc(v.fecha||'')+(v.nota?' · '+esc(v.nota):'')+'</span></span>' +
-      '<span class="amt">'+(Number(v.dias)||0)+' día'+((Number(v.dias)||0)===1?'':'s')+'</span>' +
+      '<span class="amt">'+(Number(v.dias)||0)+' día'+((Number(v.dias)||0)===1?'':'s')+(!esTomado?' · '+fmtQ(v.monto):'')+'</span>' +
     '</button>';
   }
 
   function openVacacionForm(emp){
     var vac = calcularVacaciones(emp);
+    var salarioDiario = round2((Number(emp.salarioBase)||0) / 30);
     var body =
       '<p class="hint" style="margin-top:0;">Días disponibles actualmente: <strong>'+(vac?vac.diasDisponibles:0)+'</strong></p>' +
       '<div class="field"><label>Tipo</label><div class="radio-group">' +
@@ -1586,20 +1591,35 @@ function buildDbShim(fsDb){
         '<div class="field"><label for="v-dias">Cantidad de días</label><input id="v-dias" type="number" min="0.5" step="0.5"/></div>' +
         '<div class="field"><label for="v-fecha">Fecha</label><input id="v-fecha" type="date" value="'+todayISO()+'"/></div>' +
       '</div>' +
+      '<div id="v-campo-monto" class="field" hidden><label for="v-monto">Monto a pagar (Q)</label><input id="v-monto" type="number" min="0" step="0.01"/><p class="hint">Sugerido con base en el salario diario (salario mensual ÷ 30). Puedes ajustarlo.</p></div>' +
       '<div class="field"><label for="v-nota">Nota (opcional)</label><input id="v-nota" placeholder="Ej. vacaciones de fin de año"/></div>' +
       '<button class="btn btn-primary btn-block" id="v-submit" style="margin-top:6px;">Registrar</button>';
     openSheet('Registrar vacaciones', body, function(root){
+      function esPagado(){ return root.querySelector('input[name=v-tipo]:checked').value === 'pagados'; }
+      function actualizarMontoSugerido(){
+        var dias = Number(root.querySelector('#v-dias').value)||0;
+        root.querySelector('#v-monto').value = round2(dias * salarioDiario);
+      }
+      function toggleMonto(){
+        root.querySelector('#v-campo-monto').hidden = !esPagado();
+        if(esPagado()) actualizarMontoSugerido();
+      }
+      root.querySelectorAll('input[name=v-tipo]').forEach(function(r){ r.addEventListener('change', toggleMonto); });
+      root.querySelector('#v-dias').addEventListener('input', function(){ if(esPagado()) actualizarMontoSugerido(); });
+      toggleMonto();
       root.querySelector('#v-submit').addEventListener('click', async function(){
         var tipo = root.querySelector('input[name=v-tipo]:checked').value;
         var dias = round2(root.querySelector('#v-dias').value);
         var fecha = root.querySelector('#v-fecha').value;
         var nota = root.querySelector('#v-nota').value.trim();
+        var monto = tipo === 'pagados' ? round2(root.querySelector('#v-monto').value) : 0;
         if(!dias || dias <= 0){ toast('La cantidad de días debe ser mayor a 0', true); return; }
         if(!fecha){ toast('Escribe la fecha', true); return; }
+        if(tipo === 'pagados' && (!monto || monto <= 0)){ toast('El monto a pagar debe ser mayor a 0', true); return; }
         try{
           await state.db.collection('vacaciones').add({
             empleadoId: emp.id, empleadoNombre: emp.nombre, empresaId: state.empresaActualId,
-            tipo: tipo, dias: dias, fecha: fecha, nota: nota,
+            tipo: tipo, dias: dias, fecha: fecha, nota: nota, monto: monto,
             creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
           });
           toast('Vacaciones registradas'); closeSheet();
@@ -1613,6 +1633,7 @@ function buildDbShim(fsDb){
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Tipo</span><span>'+(v.tipo==='tomados'?'Días tomados (descanso)':'Días pagados (efectivo)')+'</span></div>' +
         '<div class="breakdown-row"><span>Días</span><span class="amt">'+(Number(v.dias)||0)+'</span></div>' +
+        (v.tipo === 'pagados' ? '<div class="breakdown-row"><span>Monto pagado</span><span class="amt">'+fmtQ(v.monto)+'</span></div>' : '') +
         '<div class="breakdown-row"><span>Fecha</span><span>'+esc(v.fecha||'—')+'</span></div>' +
         (v.nota ? '<div class="breakdown-row"><span>Nota</span><span>'+esc(v.nota)+'</span></div>' : '') +
       '</div>' +
