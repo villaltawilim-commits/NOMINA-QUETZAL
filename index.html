@@ -440,6 +440,23 @@ function buildDbShim(fsDb){
   var APP_VERSION = '1.0';
   var versionAutoRegistrada = false;
   var CONTACTO_SOPORTE = 'villaltawilim@gmail.com';
+  var TRIAL_DIAS = 15;
+  function fechaMasDias(dias){
+    var d = new Date();
+    d.setDate(d.getDate() + dias);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  // Cada empresa nueva arranca con una prueba gratuita automática que vence sola: nadie tiene
+  // que activarla a mano. Si algo falla al crearla, la empresa igual queda creada (solo que sin
+  // licencia hasta que la actives tú manualmente desde Licencias).
+  async function crearLicenciaPrueba(empresaId){
+    try{
+      await state.db.collection('licencias').doc(empresaId).set({
+        activa: true, esPrueba: true, fechaVencimiento: fechaMasDias(TRIAL_DIAS),
+        notas: 'Prueba gratuita automática de '+TRIAL_DIAS+' días', creadoEn: new Date().toISOString()
+      });
+    }catch(e){}
+  }
   function esSuperadmin(){
     return !!(state.authUser && state.authUser.email && SUPERADMIN_EMAILS.indexOf(state.authUser.email.toLowerCase()) > -1);
   }
@@ -651,6 +668,11 @@ function buildDbShim(fsDb){
     }
     if(months < 0){ years -= 1; months += 12; }
     return { years: years, months: months, days: days };
+  }
+  function diasHasta(fechaISO){
+    var hoy = new Date(todayISO()+'T00:00:00');
+    var fecha = new Date(fechaISO+'T00:00:00');
+    return Math.round((fecha - hoy) / 86400000);
   }
   function fmtAntiguedad(fechaIngreso){
     var a = calcularAntiguedad(fechaIngreso);
@@ -1078,7 +1100,7 @@ function buildDbShim(fsDb){
         '</div>' +
         '<div id="onb-campo-nueva" class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
         '<div id="onb-campo-codigo" class="field" hidden><label for="onb-codigo">Código de invitación</label><input id="onb-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
-        '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">Serás la primera persona de tu empresa, con rol <strong>Administrador</strong>. Tu licencia deberá ser activada por el proveedor antes de poder usar la app.</p>' +
+        '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">Serás la primera persona de tu empresa, con rol <strong>Administrador</strong>, con 15 días de prueba gratuita automática.</p>' +
         '<button class="btn btn-primary btn-block" id="onb-submit">Continuar</button>' +
       '</div>'
     );
@@ -1089,7 +1111,7 @@ function buildDbShim(fsDb){
       document.getElementById('onb-campo-codigo').hidden = !esCodigo;
       document.getElementById('onb-nota').textContent = esCodigo
         ? 'Se te asignará el acceso y el rol que definió quien te invitó.'
-        : 'Serás la primera persona de tu empresa, con rol Administrador. Tu licencia deberá ser activada por el proveedor antes de poder usar la app.';
+        : 'Serás la primera persona de tu empresa, con rol Administrador, con 15 días de prueba gratuita automática.';
     }); });
     document.getElementById('onb-submit').addEventListener('click', async function(){
       var nombre = document.getElementById('onb-nombre').value.trim();
@@ -1116,6 +1138,7 @@ function buildDbShim(fsDb){
             nombre: nombre, rol: 'administrador', empresasAcceso: [empresaRef.id], activo: true,
             email: state.authUser.email, creadoEn: new Date().toISOString()
           });
+          await crearLicenciaPrueba(empresaRef.id);
           state.empresaActualId = empresaRef.id;
         }
       }catch(e){ toast('No se pudo continuar: '+(e.code||''), true); }
@@ -1207,7 +1230,15 @@ function buildDbShim(fsDb){
   }
 
   function licenciaVigente(){
-    return esSuperadmin() || !!(state.licencia && state.licencia.activa === true);
+    if(esSuperadmin()) return true;
+    if(!state.licencia || state.licencia.activa !== true) return false;
+    if(pruebaVencida(state.licencia)) return false;
+    return true;
+  }
+  // Solo las licencias marcadas como "prueba gratuita" vencen solas con la fecha; las de plan
+  // pagado usan esa fecha nada más como recordatorio visual, el corte real lo haces tú a mano.
+  function pruebaVencida(lic){
+    return !!(lic && lic.esPrueba && lic.fechaVencimiento && todayISO() > lic.fechaVencimiento);
   }
 
   // Para mejoras que solo deben verse en las empresas que el superadmin haya elegido
@@ -1255,9 +1286,16 @@ function buildDbShim(fsDb){
 
   function renderLicenciaBloqueada(){
     var el = document.getElementById('view-sin-empresa');
+    var lic = state.licencia;
+    if(pruebaVencida(lic)){
+      el.innerHTML =
+        '<div class="empty-state" style="margin-top:40px;"><div class="display">Tu prueba gratuita terminó</div>' +
+        'La prueba gratuita de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> venció el '+esc(lic.fechaVencimiento)+'. Contacta al proveedor del sistema para activar tu plan y seguir usando la app.</div>';
+      return;
+    }
     el.innerHTML =
       '<div class="empty-state" style="margin-top:40px;"><div class="display">Licencia inactiva</div>' +
-      'El acceso de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> está pausado. Contacta al proveedor del sistema ('+esc(CONTACTO_SOPORTE)+') para activarlo.</div>';
+      'El acceso de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> está pausado. Contacta al proveedor del sistema para activarlo.</div>';
   }
 
   function renderSinEmpresa(){
@@ -1314,9 +1352,18 @@ function buildDbShim(fsDb){
     var cumples = cumpleanosDelMes();
     var mostrarEmpresaEnCumples = empresasAccesibles().length > 1;
     var pendientesAnterior = sueldosPendientesPeriodoAnterior();
+    var diasLicencia = (state.licencia && state.licencia.fechaVencimiento) ? diasHasta(state.licencia.fechaVencimiento) : null;
+    var avisoLicencia = state.session.rol === 'administrador' && diasLicencia != null && diasLicencia <= 5;
 
     el.innerHTML =
       '<div class="view-head"><h1>Resumen</h1><p>'+esc(MESES[new Date().getMonth()])+' '+new Date().getFullYear()+'</p></div>' +
+      (avisoLicencia ?
+        '<div class="banner" style="background:#FFF4E5;color:#7A4A1A;font-weight:600;">' +
+          (state.licencia.esPrueba ? '⏳ Tu prueba gratuita ' : '📋 Tu licencia ') +
+          (diasLicencia < 0 ? 'venció hace '+Math.abs(diasLicencia)+' día(s)' : diasLicencia === 0 ? 'vence hoy' : 'vence en '+diasLicencia+' día(s)') +
+          ' ('+esc(state.licencia.fechaVencimiento)+'). Contacta al proveedor del sistema para renovar.' +
+        '</div>'
+        : '') +
       (pendientesAnterior.empleados.length ?
         '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesAnterior.empleados.length+' sueldo(s) sin pagar de '+esc(pendientesAnterior.etiqueta)+': ' +
           pendientesAnterior.empleados.map(function(e){ return esc(e.nombre); }).join(', ') +
@@ -2786,7 +2833,7 @@ function buildDbShim(fsDb){
     var esPrimera = empresasAccesibles().length === 0;
     var body =
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
-      (esPrimera ? '' :
+      (esPrimera ? '<p class="disclaimer">Incluye '+TRIAL_DIAS+' días de prueba gratuita automática.</p>' :
         '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
         '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema — contáctalo ('+esc(CONTACTO_SOPORTE)+') para obtenerlo.</p>'
       ) +
@@ -2811,6 +2858,7 @@ function buildDbShim(fsDb){
           var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
           var acc = (miembro && miembro.empresasAcceso) || [];
           await state.db.collection('equipo').doc(state.session.id).update({ empresasAcceso: acc.concat([ref.id]) });
+          await crearLicenciaPrueba(ref.id);
           if(!esPrimera){
             await state.db.collection('codigosEmpresa').doc(codigo).update({ usado: true, usadoPor: state.session.nombre, usadoEn: new Date().toISOString() });
           }
@@ -2927,8 +2975,20 @@ function buildDbShim(fsDb){
     var ultimaVersionPendiente = !!(ultimaVersion && empresas.length > 0 &&
       empresas.filter(function(em){ var l = licPorId[em.id]; return l && l.featuresHabilitadas && l.featuresHabilitadas[ultimaVersion.id]; }).length < empresas.length);
 
+    var porVencer = empresas.filter(function(em){
+      var l = licPorId[em.id];
+      if(!l || !l.fechaVencimiento) return false;
+      var dias = diasHasta(l.fechaVencimiento);
+      return dias <= 5; // ya venció o vence en 5 días o menos
+    });
+
     el.innerHTML =
       '<div class="view-head"><h1>Licencias</h1><p>Activa o pausa el acceso de cada empresa cliente</p></div>' +
+      (porVencer.length ?
+        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+porVencer.length+' licencia(s) por vencer o vencidas: ' +
+          porVencer.map(function(em){ var d = diasHasta(licPorId[em.id].fechaVencimiento); return esc(em.nombre)+' ('+(d<0?'venció hace '+Math.abs(d)+'d':d===0?'vence hoy':'vence en '+d+'d')+')'; }).join(', ') +
+        '</div>'
+        : '') +
       '<div class="ledger" id="licencias-wrap"></div>' +
       '<div class="section-title"><h2>Empresas adicionales</h2><button class="link-btn" id="gen-codigo-empresa">+ Generar código</button></div>' +
       '<p class="hint" style="margin-top:-6px;">Cada cuenta solo puede crear una empresa; comparte uno de estos códigos con un cliente que necesite crear otra.</p>' +
@@ -2964,9 +3024,11 @@ function buildDbShim(fsDb){
         var lic = licPorId[em.id];
         var activa = !!(lic && lic.activa === true);
         var vencida = !!(lic && lic.fechaVencimiento && lic.fechaVencimiento < hoy);
+        var proximaAVencer = !!(lic && lic.fechaVencimiento && !vencida && diasHasta(lic.fechaVencimiento) <= 5);
         var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
+        if(lic && lic.esPrueba) estado = 'Prueba · ' + estado;
         return '<button class="ledger-row" data-id="'+em.id+'">' +
-          '<span class="status-bar'+(activa && !vencida ? ' good' : '')+'"></span>' +
+          '<span class="status-bar'+(vencida||proximaAVencer?' warning':(activa?' good':''))+'"></span>' +
           '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+'</span></span>' +
           '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
         '</button>';
@@ -3039,12 +3101,18 @@ function buildDbShim(fsDb){
   }
 
   function openLicenciaDetalle(empresa, lic){
+    var vencidaYa = pruebaVencida(lic);
     var body =
+      (lic && lic.esPrueba ? '<div class="banner"'+(vencidaYa?' style="background:#FDECEC;color:#B3261E;"':'')+'>'+(vencidaYa?'⚠️ Prueba gratuita vencida el '+esc(lic.fechaVencimiento):'En prueba gratuita, vence sola el '+esc(lic.fechaVencimiento))+'</div>' : '') +
+      '<div class="field"><label>Tipo de plan</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="lic-tipo" value="prueba" '+(lic&&lic.esPrueba?'checked':'')+'/><span>Prueba gratuita (vence sola)</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="lic-tipo" value="pagado" '+(!lic||!lic.esPrueba?'checked':'')+'/><span>Plan pagado</span></label>' +
+      '</div></div>' +
       '<div class="field"><label>Estado</label><div class="radio-group">' +
         '<label class="radio-chip"><input type="radio" name="lic-estado" value="activa" '+(lic&&lic.activa===true?'checked':'')+'/><span>Activa</span></label>' +
         '<label class="radio-chip"><input type="radio" name="lic-estado" value="inactiva" '+(!lic||lic.activa!==true?'checked':'')+'/><span>Inactiva</span></label>' +
       '</div></div>' +
-      '<div class="field"><label for="lic-vence">Fecha de vencimiento (informativa)</label><input id="lic-vence" type="date" value="'+esc(lic&&lic.fechaVencimiento||'')+'"/></div>' +
+      '<div class="field"><label for="lic-vence">Fecha de vencimiento</label><input id="lic-vence" type="date" value="'+esc(lic&&lic.fechaVencimiento||'')+'"/><p class="hint" id="lic-vence-hint">En plan pagado es solo un recordatorio visual; en prueba gratuita, la app se bloquea sola en esa fecha.</p></div>' +
       '<div class="field"><label for="lic-precio">Precio de venta (Q)</label><input id="lic-precio" type="number" min="0" step="0.01" value="'+(lic&&lic.precioVenta!=null?lic.precioVenta:'')+'"/></div>' +
       '<div class="field"><label for="lic-maxusuarios">Usuarios permitidos</label><input id="lic-maxusuarios" type="number" min="1" step="1" value="'+maxUsuariosEmpresa(lic)+'"/><p class="hint">Incluye 2 por defecto; sube este número si el cliente pagó por usuarios adicionales.</p></div>' +
       '<div class="field"><label for="lic-notas">Notas</label><textarea id="lic-notas" placeholder="Ej. Plan mensual, pagó por transferencia el 10/09">'+esc(lic&&lic.notas||'')+'</textarea></div>' +
@@ -3052,6 +3120,7 @@ function buildDbShim(fsDb){
       '<button class="btn btn-primary btn-block" id="lic-submit" style="margin-top:6px;">Guardar</button>';
     openSheet(esc(empresa.nombre), body, function(root){
       root.querySelector('#lic-submit').addEventListener('click', function(){
+        var esPrueba = root.querySelector('input[name=lic-tipo]:checked').value === 'prueba';
         var activa = root.querySelector('input[name=lic-estado]:checked').value === 'activa';
         var fechaVencimiento = root.querySelector('#lic-vence').value;
         var precioVenta = root.querySelector('#lic-precio').value;
@@ -3060,7 +3129,7 @@ function buildDbShim(fsDb){
         requireLicenciaAuth(async function(){
           try{
             await state.db.collection('licencias').doc(empresa.id).set({
-              activa: activa, fechaVencimiento: fechaVencimiento || null,
+              esPrueba: esPrueba, activa: activa, fechaVencimiento: fechaVencimiento || null,
               precioVenta: precioVenta === '' ? null : round2(precioVenta), maxUsuarios: maxUsuarios, notas: notas,
               actualizadoEn: new Date().toISOString(), actualizadoPor: state.session.nombre
             }, { merge: true });
