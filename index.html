@@ -814,6 +814,14 @@ function buildDbShim(fsDb){
     var pre = periodoTipo === 'mensual' ? 'Mensual' : (periodoTipo === 'quincena1' ? 'Q1' : 'Q2');
     return pre + " · " + mes + " " + anio;
   }
+  // periodoEtiqueta() se guarda tal cual en los pagos y se usa para comparar "¿ya se pagó este
+  // periodo?", así que su formato no debe cambiar. Esta función solo cambia cómo se VE en pantalla.
+  function etiquetaLegible(etiqueta){
+    return String(etiqueta||'')
+      .replace(/^Q1\b/, 'Primera quincena')
+      .replace(/^Q2\b/, 'Segunda quincena')
+      .replace(/^Mensual\b/, 'Salario total');
+  }
 
   /* ============================ STATE ============================ */
   var state = {
@@ -1455,7 +1463,7 @@ function buildDbShim(fsDb){
         '</div>'
         : '') +
       (pendientesAnterior.empleados.length ?
-        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesAnterior.empleados.length+' sueldo(s) sin pagar de '+esc(pendientesAnterior.etiqueta)+': ' +
+        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesAnterior.empleados.length+' sueldo(s) sin pagar de '+esc(etiquetaLegible(pendientesAnterior.etiqueta))+': ' +
           pendientesAnterior.empleados.map(function(e){ return esc(e.nombre); }).join(', ') +
         '<button class="btn btn-danger btn-block" id="qa-pagar-pendiente" style="margin-top:8px;">Pagar ahora</button></div>'
         : '') +
@@ -2143,7 +2151,7 @@ function buildDbShim(fsDb){
     var pagado = p.estado !== 'pendiente';
     return '<button class="ledger-row" data-id="'+p.id+'">' +
       '<span class="status-bar '+(pagado?'good':'warning')+'"></span>' +
-      '<span class="row-main"><span class="title">'+esc(p.empleadoNombre)+'</span><span class="sub">'+esc(p.periodoEtiqueta)+'</span></span>' +
+      '<span class="row-main"><span class="title">'+esc(p.empleadoNombre)+'</span><span class="sub">'+esc(etiquetaLegible(p.periodoEtiqueta))+'</span></span>' +
       '<span class="row-amount"><span class="amt">'+fmtQ(p.totalNeto)+'</span><span class="pill '+(pagado?'pagado':'pendiente')+'">'+(pagado?'Pagado':'Pendiente')+'</span></span>' +
       '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
     '</button>';
@@ -2169,7 +2177,7 @@ function buildDbShim(fsDb){
     var headers = ['Empleado','Puesto','Periodo','Fecha de pago','Salario base','Bonificación','Salario bruto','IGSS','ISR','Deducción puntual','Préstamos/descuentos','Total neto','Estado'];
     var filas = pagos.map(function(p){
       var prestamosTotal = round2((p.prestamosAplicados||[]).reduce(function(s,la){ return s + (Number(la.monto)||0); }, 0));
-      return [p.empleadoNombre, p.puesto||'', p.periodoEtiqueta, p.fechaPago, p.salarioBase, p.bonificacion, p.salarioBruto,
+      return [p.empleadoNombre, p.puesto||'', etiquetaLegible(p.periodoEtiqueta), p.fechaPago, p.salarioBase, p.bonificacion, p.salarioBruto,
         p.igss||0, p.isr||0, p.otrasDeduccionesManual||0, prestamosTotal, p.totalNeto, p.estado==='pendiente'?'Pendiente':'Pagado'];
     });
     var lineas = [headers].concat(filas).map(function(fila){ return fila.map(csvCelda).join(','); });
@@ -2253,7 +2261,7 @@ function buildDbShim(fsDb){
     var filasHtml = pagos.map(function(p){
       var prestamosTotal = round2((p.prestamosAplicados||[]).reduce(function(s,la){ return s + (Number(la.monto)||0); }, 0));
       var deducciones = round2((Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeduccionesManual)||0) + prestamosTotal);
-      return '<tr><td>'+esc(p.empleadoNombre)+'</td><td>'+esc(p.periodoEtiqueta)+'</td><td>'+esc(p.fechaPago)+'</td>' +
+      return '<tr><td>'+esc(p.empleadoNombre)+'</td><td>'+esc(etiquetaLegible(p.periodoEtiqueta))+'</td><td>'+esc(p.fechaPago)+'</td>' +
         '<td class="num">'+fmtQ(p.salarioBruto)+'</td><td class="num">'+fmtQ(deducciones)+'</td><td class="num">'+fmtQ(p.totalNeto)+'</td>' +
         '<td>'+(p.estado==='pendiente'?'Pendiente':'Pagado')+'</td></tr>';
     }).join('');
@@ -2534,7 +2542,7 @@ function buildDbShim(fsDb){
     var body =
       (p.diasTrabajados ? '<div class="banner">Empleado nuevo: se le pagaron '+p.diasTrabajados.diasTrabajados+' de '+p.diasTrabajados.diasPeriodo+' días de este periodo.</div>' : '') +
       '<div class="breakdown">' +
-        '<div class="breakdown-row"><span>Periodo</span><span>'+esc(p.periodoEtiqueta)+'</span></div>' +
+        '<div class="breakdown-row"><span>Periodo</span><span>'+esc(etiquetaLegible(p.periodoEtiqueta))+'</span></div>' +
         '<div class="breakdown-row"><span>Fecha</span><span>'+esc(p.fechaPago)+'</span></div>' +
         '<div class="breakdown-row"><span>Salario base</span><span class="amt">'+fmtQ(p.salarioBase)+'</span></div>' +
         '<div class="breakdown-row"><span>Bonificación</span><span class="amt">'+fmtQ(p.bonificacion)+'</span></div>' +
@@ -2698,7 +2706,7 @@ function buildDbShim(fsDb){
             '<label class="radio-chip"><input type="radio" name="ps-periodo" value="mensual" '+(ctx.periodo==='mensual'?'checked':'')+'/><span>Mensual</span></label>' +
           '</div></div>' +
           '<div class="field"><label for="ps-fecha">Fecha de pago</label><input id="ps-fecha" type="date" value="'+ctx.fecha+'"/></div>' +
-          (activos.length ? '<p class="pay-count">'+pagados+' de '+activos.length+' empleados pagados · '+esc(periodoEtiqueta(ctx.fecha, ctx.periodo))+'</p>' : '') +
+          (activos.length ? '<p class="pay-count">'+pagados+' de '+activos.length+' empleados pagados · '+esc(etiquetaLegible(periodoEtiqueta(ctx.fecha, ctx.periodo)))+'</p>' : '') +
           (activos.length ? '<div class="ledger">'+rows+'</div>' : '<div class="empty-state"><div class="display">Sin empleados activos</div>Agrega empleados para poder pagarles.</div>');
 
         content.querySelectorAll('input[name=ps-periodo]').forEach(function(r){ r.addEventListener('change', function(){ ctx.periodo = r.value; renderList(); }); });
