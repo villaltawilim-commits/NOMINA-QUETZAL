@@ -1899,6 +1899,7 @@ function buildDbShim(fsDb){
 
     el.innerHTML =
       '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId;}).length+' pagos registrados</p></div>' +
+      '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:12px;">Exportar reporte (PDF / Excel)</button>' +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="pago-search" placeholder="Buscar por empleado" value="'+esc(state.filters.pagosQuery)+'"/></div>' +
       '<div class="filter-chips">' +
         chip('todos','Todos') + chip('pagado','Pagados') + chip('pendiente','Pendientes') +
@@ -1909,6 +1910,7 @@ function buildDbShim(fsDb){
 
     document.getElementById('pago-search').addEventListener('input', function(e){ state.filters.pagosQuery = e.target.value; renderNomina(); });
     el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
+    document.getElementById('exportar-nomina-btn').addEventListener('click', openExportarNomina);
 
     var wrap = document.getElementById('pagos-wrap');
     if(list.length === 0){
@@ -1927,6 +1929,160 @@ function buildDbShim(fsDb){
       '<span class="row-amount"><span class="amt">'+fmtQ(p.totalNeto)+'</span><span class="pill '+(pagado?'pagado':'pendiente')+'">'+(pagado?'Pagado':'Pendiente')+'</span></span>' +
       '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
     '</button>';
+  }
+
+  /* ---------- Exportar reporte de nómina (CSV / PDF) ---------- */
+  function descargarArchivo(nombre, contenido, tipoMime){
+    var blob = new Blob([contenido], { type: tipoMime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = nombre;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function csvCelda(v){
+    var s = String(v==null?'':v);
+    if(s.indexOf(',')>-1 || s.indexOf('"')>-1 || s.indexOf('\n')>-1){ s = '"'+s.replace(/"/g,'""')+'"'; }
+    return s;
+  }
+
+  function generarCSVNomina(pagos){
+    var headers = ['Empleado','Puesto','Periodo','Fecha de pago','Salario base','Bonificación','Salario bruto','IGSS','ISR','Deducción puntual','Préstamos/descuentos','Total neto','Estado'];
+    var filas = pagos.map(function(p){
+      var prestamosTotal = round2((p.prestamosAplicados||[]).reduce(function(s,la){ return s + (Number(la.monto)||0); }, 0));
+      return [p.empleadoNombre, p.puesto||'', p.periodoEtiqueta, p.fechaPago, p.salarioBase, p.bonificacion, p.salarioBruto,
+        p.igss||0, p.isr||0, p.otrasDeduccionesManual||0, prestamosTotal, p.totalNeto, p.estado==='pendiente'?'Pendiente':'Pagado'];
+    });
+    var lineas = [headers].concat(filas).map(function(fila){ return fila.map(csvCelda).join(','); });
+    return '﻿' + lineas.join('\r\n');
+  }
+
+  function openExportarNomina(){
+    var hoy = new Date();
+    var mesActual = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
+    var body =
+      '<div class="field"><label>Rango</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="exp-rango" value="mes" checked/><span>Un mes</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="exp-rango" value="personalizado"/><span>Fechas personalizadas</span></label>' +
+      '</div></div>' +
+      '<div id="exp-campo-mes" class="field"><label for="exp-mes">Mes</label><input id="exp-mes" type="month" value="'+mesActual+'"/></div>' +
+      '<div id="exp-campo-fechas" class="field-row" hidden>' +
+        '<div class="field"><label for="exp-desde">Desde</label><input id="exp-desde" type="date" value="'+todayISO()+'"/></div>' +
+        '<div class="field"><label for="exp-hasta">Hasta</label><input id="exp-hasta" type="date" value="'+todayISO()+'"/></div>' +
+      '</div>' +
+      '<label class="loan-check"><input type="checkbox" id="exp-solo-pagados" checked/><span class="lc-text"><span class="t1">Incluir solo pagos ya pagados</span></span></label>' +
+      '<button class="btn btn-primary btn-block" id="exp-csv" style="margin-top:14px;">Descargar Excel (CSV)</button>' +
+      '<button class="btn btn-secondary btn-block" id="exp-pdf" style="margin-top:8px;">Descargar PDF</button>';
+    openSheet('Exportar reporte de nómina', body, function(root){
+      root.querySelectorAll('input[name=exp-rango]').forEach(function(r){
+        r.addEventListener('change', function(){
+          var esMes = root.querySelector('input[name=exp-rango]:checked').value === 'mes';
+          root.querySelector('#exp-campo-mes').hidden = !esMes;
+          root.querySelector('#exp-campo-fechas').hidden = esMes;
+        });
+      });
+      function obtenerRango(){
+        var esMes = root.querySelector('input[name=exp-rango]:checked').value === 'mes';
+        if(esMes){
+          var mes = root.querySelector('#exp-mes').value;
+          if(!mes) return null;
+          var d = new Date(mes+'-01T00:00:00');
+          var ultimoDia = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+          return { desde: mes+'-01', hasta: mes+'-'+String(ultimoDia).padStart(2,'0'), etiqueta: MESES[d.getMonth()]+' '+d.getFullYear() };
+        }
+        var desde = root.querySelector('#exp-desde').value;
+        var hasta = root.querySelector('#exp-hasta').value;
+        if(!desde || !hasta) return null;
+        return { desde: desde, hasta: hasta, etiqueta: desde+' a '+hasta };
+      }
+      function pagosDelRango(){
+        var rango = obtenerRango();
+        if(!rango) return null;
+        var soloPagados = root.querySelector('#exp-solo-pagados').checked;
+        var pagos = state.pagos.filter(function(p){
+          if(p.empresaId !== state.empresaActualId) return false;
+          if(soloPagados && p.estado === 'pendiente') return false;
+          return p.fechaPago >= rango.desde && p.fechaPago <= rango.hasta;
+        }).sort(function(a,b){ return (a.fechaPago||'').localeCompare(b.fechaPago||''); });
+        return { pagos: pagos, rango: rango };
+      }
+      root.querySelector('#exp-csv').addEventListener('click', function(){
+        var r = pagosDelRango();
+        if(!r){ toast('Selecciona el rango', true); return; }
+        if(r.pagos.length === 0){ toast('No hay pagos en ese rango', true); return; }
+        descargarArchivo('Nomina '+esc(empresaActual().nombre)+' '+r.rango.etiqueta+'.csv', generarCSVNomina(r.pagos), 'text/csv;charset=utf-8;');
+        toast('Descargado'); closeSheet();
+      });
+      root.querySelector('#exp-pdf').addEventListener('click', function(){
+        var r = pagosDelRango();
+        if(!r){ toast('Selecciona el rango', true); return; }
+        if(r.pagos.length === 0){ toast('No hay pagos en ese rango', true); return; }
+        generarPDFNomina(r.pagos, r.rango.etiqueta);
+        closeSheet();
+      });
+    });
+  }
+
+  function generarPDFNomina(pagos, etiquetaPeriodo){
+    if(!window.html2pdf){ toast('No se pudo cargar el generador de PDF, revisa tu conexión e intenta de nuevo', true); return; }
+    var totalBruto = round2(pagos.reduce(function(s,p){ return s + (Number(p.salarioBruto)||0); }, 0));
+    var totalDeducciones = round2(pagos.reduce(function(s,p){
+      var prestamosTotal = (p.prestamosAplicados||[]).reduce(function(x,la){ return x + (Number(la.monto)||0); }, 0);
+      return s + (Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeduccionesManual)||0) + prestamosTotal;
+    }, 0));
+    var totalNeto = round2(pagos.reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0));
+    var filasHtml = pagos.map(function(p){
+      var prestamosTotal = round2((p.prestamosAplicados||[]).reduce(function(s,la){ return s + (Number(la.monto)||0); }, 0));
+      var deducciones = round2((Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeduccionesManual)||0) + prestamosTotal);
+      return '<tr><td>'+esc(p.empleadoNombre)+'</td><td>'+esc(p.periodoEtiqueta)+'</td><td>'+esc(p.fechaPago)+'</td>' +
+        '<td class="num">'+fmtQ(p.salarioBruto)+'</td><td class="num">'+fmtQ(deducciones)+'</td><td class="num">'+fmtQ(p.totalNeto)+'</td>' +
+        '<td>'+(p.estado==='pendiente'?'Pendiente':'Pagado')+'</td></tr>';
+    }).join('');
+
+    var estilos =
+      '*{ box-sizing:border-box; }' +
+      '.pdf-page{ background:#fff; font-family:"IBM Plex Sans",Arial,sans-serif; color:#161616; width:11in; min-height:8.5in; padding:1.5cm; }' +
+      '.pdf-page h1{ font-size:1.2rem; margin:0 0 4px; }' +
+      '.pdf-page .sub{ color:#555; font-size:.85rem; margin-bottom:16px; }' +
+      '.pdf-page table{ width:100%; border-collapse:collapse; font-size:.78rem; }' +
+      '.pdf-page th{ text-align:left; border-bottom:2px solid #111; padding:6px 4px; }' +
+      '.pdf-page td{ padding:5px 4px; border-bottom:1px solid #ddd; }' +
+      '.pdf-page td.num, .pdf-page th.num{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:8px; }';
+
+    var contenidoHtml =
+      '<h1>Reporte de nómina — '+esc(empresaActual().nombre||'')+'</h1>' +
+      '<div class="sub">Periodo: '+esc(etiquetaPeriodo)+' · '+pagos.length+' pago(s)</div>' +
+      '<table><thead><tr><th>Empleado</th><th>Periodo</th><th>Fecha</th><th class="num">Bruto</th><th class="num">Deducciones</th><th class="num">Neto</th><th>Estado</th></tr></thead>' +
+      '<tbody>' + filasHtml + '</tbody>' +
+      '<tfoot><tr class="total"><td colspan="3">TOTAL</td><td class="num">'+fmtQ(totalBruto)+'</td><td class="num">'+fmtQ(totalDeducciones)+'</td><td class="num">'+fmtQ(totalNeto)+'</td><td></td></tr></tfoot>' +
+      '</table>';
+
+    var contenedor = document.createElement('div');
+    contenedor.style.position = 'fixed';
+    contenedor.style.left = '-10000px';
+    contenedor.style.top = '0';
+    contenedor.style.width = '11in';
+    contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenidoHtml + '</div>';
+    document.body.appendChild(contenedor);
+    var elPagina = contenedor.querySelector('.pdf-page');
+
+    toast('Generando PDF…');
+    html2pdf().set({
+      margin: 0,
+      filename: ('Nomina '+empresaActual().nombre+' '+etiquetaPeriodo).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(elPagina).save().then(function(){
+      document.body.removeChild(contenedor);
+      toast('PDF descargado');
+    }).catch(function(){
+      document.body.removeChild(contenedor);
+      toast('No se pudo generar el PDF', true);
+    });
   }
 
   function openPagoForm(){
