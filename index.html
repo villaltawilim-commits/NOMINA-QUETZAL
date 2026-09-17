@@ -657,6 +657,23 @@ function buildDbShim(fsDb){
     if(a.days || parts.length === 0) parts.push(a.days + (a.days === 1 ? ' día' : ' días'));
     return parts.join(', ');
   }
+  // Vacaciones según el Código de Trabajo de Guatemala (Art. 130-131): 15 días hábiles pagados
+  // por cada año de servicio continuo. Se muestra el acumulado proporcional al tiempo laborado
+  // hasta hoy, menos los días que ya se le hayan otorgado (tomados o pagados en efectivo).
+  var DIAS_VACACIONES_POR_ANIO = 15;
+  function calcularVacaciones(emp){
+    if(!emp.fechaIngreso) return null;
+    var ingreso = new Date(emp.fechaIngreso + 'T00:00:00');
+    var hoy = new Date();
+    if(isNaN(ingreso.getTime()) || ingreso > hoy) return null;
+    var diasLaborados = Math.floor((hoy - ingreso) / 86400000);
+    var diasGenerados = round2((diasLaborados / 365) * DIAS_VACACIONES_POR_ANIO);
+    var movimientos = state.vacaciones.filter(function(v){ return v.empleadoId === emp.id; })
+      .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    var diasUsados = round2(movimientos.reduce(function(s,v){ return s + (Number(v.dias)||0); }, 0));
+    var diasDisponibles = round2(diasGenerados - diasUsados);
+    return { diasGenerados: diasGenerados, diasUsados: diasUsados, diasDisponibles: diasDisponibles, movimientos: movimientos };
+  }
   function empFraccionQuincena1(emp){
     var total = Number(emp.salarioBase)||0;
     if(!total || emp.salarioQuincena1 == null) return 0.5;
@@ -760,6 +777,7 @@ function buildDbShim(fsDb){
     prestamos: [],
     comisiones: [],
     documentos: [],
+    vacaciones: [],
     equipo: [],
     empresas: [],
     empresaActualId: null,
@@ -893,7 +911,7 @@ function buildDbShim(fsDb){
 
     unsubscribesEmpresa.forEach(function(u){ try{ u(); }catch(e){} });
     unsubscribesEmpresa = [];
-    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = null; state.invitaciones = [];
+    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = null; state.invitaciones = []; state.vacaciones = [];
 
     var id = state.empresaActualId;
     if(!id) return;
@@ -933,6 +951,11 @@ function buildDbShim(fsDb){
       state.invitaciones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
     }, function(err){ if(state.authUser) toast('No se pudo sincronizar invitaciones: ' + err.code, true); }));
+
+    unsubscribesEmpresa.push(db.collection('vacaciones').where('empresaId','==', id).onSnapshot(function(snap){
+      state.vacaciones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      render();
+    }, function(err){ if(state.authUser) toast('No se pudo sincronizar vacaciones: ' + err.code, true); }));
   }
 
   function teardownFirestoreListeners(){
@@ -1130,7 +1153,7 @@ function buildDbShim(fsDb){
       state.miEquipoDoc = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
-      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = [];
+      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
       showLoginScreen();
     }
   });
@@ -1410,6 +1433,7 @@ function buildDbShim(fsDb){
       .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
     var documentosEmp = state.documentos.filter(function(d){ return d.empleadoId === emp.id; })
       .sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    var vac = calcularVacaciones(emp);
     var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
     var body =
       (igssOn && isrOn? '' : '<div class="banner">'+(!igssOn&&!isrOn?'IGSS e ISR están desactivados':(!igssOn?'IGSS está desactivado':'ISR está desactivado'))+' para este empleado.</div>') +
@@ -1434,6 +1458,16 @@ function buildDbShim(fsDb){
         '<div class="breakdown-row"><span>IGSS</span><span>'+(igssOn?'Activado':'Desactivado')+'</span></div>' +
         '<div class="breakdown-row"><span>ISR</span><span>'+(isrOn?'Activado':'Desactivado')+'</span></div>' +
       '</div>' +
+      '<div class="section-title" style="margin-top:12px;"><h2>Vacaciones</h2><button class="link-btn" id="add-vacacion" '+(vac?'':'disabled')+'>+ Registrar</button></div>' +
+      (!vac ? '<div class="empty-state">Agrega la fecha de ingreso para calcular vacaciones</div>' :
+        '<div class="breakdown">' +
+          '<div class="breakdown-row"><span>Días generados a la fecha</span><span class="amt">'+vac.diasGenerados+'</span></div>' +
+          '<div class="breakdown-row"><span>Días ya otorgados</span><span class="amt">-'+vac.diasUsados+'</span></div>' +
+          '<div class="breakdown-row total"><span>Días disponibles</span><span class="amt">'+vac.diasDisponibles+'</span></div>' +
+        '</div>' +
+        '<p class="hint">Según el Código de Trabajo de Guatemala: 15 días hábiles por cada año de servicio continuo, calculado proporcionalmente al tiempo laborado.</p>' +
+        (vac.movimientos.length? '<div class="ledger" id="vacaciones-wrap">'+vac.movimientos.map(vacacionRowHtml).join('')+'</div>' : '')
+      ) +
       '<div class="section-title" style="margin-top:12px;"><h2>Préstamos y descuentos</h2><button class="link-btn" id="add-prestamo">+ Nuevo</button></div>' +
       '<div id="prestamos-wrap">'+(prestamosEmp.length? '<div class="ledger">'+prestamosEmp.map(prestamoRowHtml).join('')+'</div>' : '<div class="empty-state">Sin préstamos ni descuentos registrados</div>')+'</div>' +
       '<div class="section-title"><h2>Comisiones</h2><button class="link-btn" id="add-comision">+ Nueva</button></div>' +
@@ -1450,6 +1484,9 @@ function buildDbShim(fsDb){
       '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
     openSheet(esc(emp.nombre), body, function(root){
       root.querySelector('#ver-historial-mensual').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openHistorialMensual(emp); }, 230); });
+      var addVacBtn = root.querySelector('#add-vacacion');
+      if(addVacBtn) addVacBtn.addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openVacacionForm(emp); }, 230); });
+      if(vac && vac.movimientos.length){ wireLedgerRows(root.querySelector('#vacaciones-wrap'), vac.movimientos, function(v){ closeSheet(); setTimeout(function(){ openVacacionDetail(v); }, 230); }); }
       if(historial.length){ wireLedgerRows(root.querySelector('#hist-wrap'), historial, function(p){ closeSheet(); setTimeout(function(){ openPagoDetail(p); }, 230); }); }
       if(prestamosEmp.length){ wireLedgerRows(root.querySelector('#prestamos-wrap'), prestamosEmp, function(l){ closeSheet(); setTimeout(function(){ openPrestamoDetail(l); }, 230); }); }
       root.querySelector('#add-prestamo').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openPrestamoForm(emp); }, 230); });
@@ -1525,6 +1562,68 @@ function buildDbShim(fsDb){
         '</div>';
     }).join('');
     openSheet('Historial · '+esc(emp.nombre), body, function(root){});
+  }
+
+  /* ---------- Vacaciones ---------- */
+  function vacacionRowHtml(v){
+    var esTomado = v.tipo === 'tomados';
+    return '<button class="ledger-row" data-id="'+v.id+'">' +
+      '<span class="status-bar '+(esTomado?'good':'warning')+'"></span>' +
+      '<span class="row-main"><span class="title">'+(esTomado?'Días tomados':'Días pagados')+'</span><span class="sub">'+esc(v.fecha||'')+(v.nota?' · '+esc(v.nota):'')+'</span></span>' +
+      '<span class="amt">'+(Number(v.dias)||0)+' día'+((Number(v.dias)||0)===1?'':'s')+'</span>' +
+    '</button>';
+  }
+
+  function openVacacionForm(emp){
+    var vac = calcularVacaciones(emp);
+    var body =
+      '<p class="hint" style="margin-top:0;">Días disponibles actualmente: <strong>'+(vac?vac.diasDisponibles:0)+'</strong></p>' +
+      '<div class="field"><label>Tipo</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="v-tipo" value="tomados" checked/><span>Días tomados (descanso)</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="v-tipo" value="pagados"/><span>Días pagados (efectivo)</span></label>' +
+      '</div></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label for="v-dias">Cantidad de días</label><input id="v-dias" type="number" min="0.5" step="0.5"/></div>' +
+        '<div class="field"><label for="v-fecha">Fecha</label><input id="v-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      '</div>' +
+      '<div class="field"><label for="v-nota">Nota (opcional)</label><input id="v-nota" placeholder="Ej. vacaciones de fin de año"/></div>' +
+      '<button class="btn btn-primary btn-block" id="v-submit" style="margin-top:6px;">Registrar</button>';
+    openSheet('Registrar vacaciones', body, function(root){
+      root.querySelector('#v-submit').addEventListener('click', async function(){
+        var tipo = root.querySelector('input[name=v-tipo]:checked').value;
+        var dias = round2(root.querySelector('#v-dias').value);
+        var fecha = root.querySelector('#v-fecha').value;
+        var nota = root.querySelector('#v-nota').value.trim();
+        if(!dias || dias <= 0){ toast('La cantidad de días debe ser mayor a 0', true); return; }
+        if(!fecha){ toast('Escribe la fecha', true); return; }
+        try{
+          await state.db.collection('vacaciones').add({
+            empleadoId: emp.id, empleadoNombre: emp.nombre, empresaId: state.empresaActualId,
+            tipo: tipo, dias: dias, fecha: fecha, nota: nota,
+            creadoPor: state.session.nombre, creadoEn: new Date().toISOString()
+          });
+          toast('Vacaciones registradas'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openVacacionDetail(v){
+    var body =
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Tipo</span><span>'+(v.tipo==='tomados'?'Días tomados (descanso)':'Días pagados (efectivo)')+'</span></div>' +
+        '<div class="breakdown-row"><span>Días</span><span class="amt">'+(Number(v.dias)||0)+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha</span><span>'+esc(v.fecha||'—')+'</span></div>' +
+        (v.nota ? '<div class="breakdown-row"><span>Nota</span><span>'+esc(v.nota)+'</span></div>' : '') +
+      '</div>' +
+      '<button class="btn btn-danger btn-block" id="delete-vacacion" style="margin-top:14px;">Eliminar registro</button>';
+    openSheet('Vacaciones', body, function(root){
+      root.querySelector('#delete-vacacion').addEventListener('click', async function(){
+        if(!confirm('¿Eliminar este registro de vacaciones?')) return;
+        try{ await state.db.collection('vacaciones').doc(v.id).delete(); toast('Registro eliminado'); closeSheet(); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
   }
 
   /* ---------- Préstamos y descuentos ---------- */
