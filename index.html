@@ -2715,26 +2715,37 @@ function buildDbShim(fsDb){
   }
 
   function openEmpresaForm(){
+    var esPrimera = empresasAccesibles().length === 0;
     var body =
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
-      '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
-      '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema — contáctalo ('+esc(CONTACTO_SOPORTE)+') para obtenerlo.</p>' +
+      (esPrimera ? '' :
+        '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
+        '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema — contáctalo ('+esc(CONTACTO_SOPORTE)+') para obtenerlo.</p>'
+      ) +
       '<button class="btn btn-primary btn-block" id="em-submit" style="margin-top:6px;">Crear empresa</button>';
     openSheet('Nueva empresa', body, function(root){
       root.querySelector('#em-submit').addEventListener('click', async function(){
         var nombre = root.querySelector('#em-nombre').value.trim();
-        var codigo = root.querySelector('#em-codigo').value.trim().toUpperCase();
         if(!nombre){ toast('Escribe el nombre de la empresa', true); return; }
-        if(!codigo){ toast('Escribe el código de autorización', true); return; }
+        var codigo = '';
+        var codSnap = null;
+        if(!esPrimera){
+          codigo = root.querySelector('#em-codigo').value.trim().toUpperCase();
+          if(!codigo){ toast('Escribe el código de autorización', true); return; }
+        }
         try{
-          var codSnap = await state.db.collection('codigosEmpresa').doc(codigo).get();
-          if(!codSnap.exists){ toast('Código inválido', true); return; }
-          if(codSnap.data().usado){ toast('Este código ya fue usado', true); return; }
+          if(!esPrimera){
+            codSnap = await state.db.collection('codigosEmpresa').doc(codigo).get();
+            if(!codSnap.exists){ toast('Código inválido', true); return; }
+            if(codSnap.data().usado){ toast('Este código ya fue usado', true); return; }
+          }
           var ref = await state.db.collection('empresas').add({ nombre: nombre, creadaPor: state.session.nombre, creadaEn: new Date().toISOString() });
           var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
           var acc = (miembro && miembro.empresasAcceso) || [];
           await state.db.collection('equipo').doc(state.session.id).update({ empresasAcceso: acc.concat([ref.id]) });
-          await state.db.collection('codigosEmpresa').doc(codigo).update({ usado: true, usadoPor: state.session.nombre, usadoEn: new Date().toISOString() });
+          if(!esPrimera){
+            await state.db.collection('codigosEmpresa').doc(codigo).update({ usado: true, usadoPor: state.session.nombre, usadoEn: new Date().toISOString() });
+          }
           state.empresaActualId = ref.id;
           toast('Empresa creada'); closeSheet();
         }catch(e){ toast('No se pudo crear: '+(e.code||''), true); }
