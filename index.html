@@ -366,6 +366,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail,
   EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification
@@ -384,6 +385,10 @@ const firebaseConfig = {
   measurementId: "G-P4NF545YRG"
 };
 const fbApp = initializeApp(firebaseConfig);
+initializeAppCheck(fbApp, {
+  provider: new ReCaptchaV3Provider('6LeX3cAtAAAAAOVRp3jjVcHANj__3Ze-hcu3rga2'),
+  isTokenAutoRefreshEnabled: true
+});
 const auth = getAuth(fbApp);
 const firestore = getFirestore(fbApp);
 
