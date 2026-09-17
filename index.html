@@ -1242,10 +1242,13 @@ function buildDbShim(fsDb){
     document.getElementById('dp-reenviar').addEventListener('click', function(){ enviarEnlaceDosPasos(true); });
     document.getElementById('dp-salir').addEventListener('click', function(){ signOut(auth); });
 
+    console.log('[2FA-DEBUG] showConfirmacionDosPasos() ejecutado para', email);
+
     if(enlaceDosPasosEnviadoPara !== email){ enviarEnlaceDosPasos(false); }
 
     if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
     dosPasosUnsub = state.db.collection('confirmaciones2FA').doc(state.authUser.uid).onSnapshot(function(snap){
+      console.log('[2FA-DEBUG] confirmaciones2FA snapshot, exists=', snap.exists);
       if(snap.exists){
         marcarDosPasosConfirmado();
         if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
@@ -1270,9 +1273,10 @@ function buildDbShim(fsDb){
   }
 
   function dosPasosConfirmadoEnEstaSesion(){
-    try{ return sessionStorage.getItem('dosPasosOk_' + state.authUser.uid) === '1'; }catch(e){ return false; }
+    try{ var v = sessionStorage.getItem('dosPasosOk_' + state.authUser.uid); console.log('[2FA-DEBUG] dosPasosConfirmadoEnEstaSesion lee', v); return v === '1'; }catch(e){ return false; }
   }
   function marcarDosPasosConfirmado(){
+    console.log('[2FA-DEBUG] marcarDosPasosConfirmado() ejecutado');
     try{ sessionStorage.setItem('dosPasosOk_' + state.authUser.uid, '1'); }catch(e){}
   }
 
@@ -1281,6 +1285,7 @@ function buildDbShim(fsDb){
     if(state.miEquipoDoc === undefined) return; // aún no llega nuestro propio documento
     if(esSuperadmin() && state.configSuperadmin === undefined) return; // aún no llega nuestra configuración
     var miDoc = state.miEquipoDoc;
+    console.log('[2FA-DEBUG] checkProfileAndRender: esSuperadmin=', esSuperadmin(), 'configSuperadmin=', JSON.stringify(state.configSuperadmin), 'confirmado=', dosPasosConfirmadoEnEstaSesion());
     if(miDoc){
       if(miDoc.activo === false){ showCuentaDesactivada(); return; }
       if(esSuperadmin() && state.configSuperadmin && state.configSuperadmin.dosPasosEmail === true && !dosPasosConfirmadoEnEstaSesion()){
