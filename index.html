@@ -2046,9 +2046,10 @@ function buildDbShim(fsDb){
       '.pdf-page h1{ font-size:1.2rem; margin:0 0 4px; }' +
       '.pdf-page .sub{ color:#555; font-size:.85rem; margin-bottom:16px; }' +
       '.pdf-page table{ width:100%; border-collapse:collapse; font-size:.78rem; }' +
-      '.pdf-page th{ text-align:left; border-bottom:2px solid #111; padding:6px 4px; }' +
-      '.pdf-page td{ padding:5px 4px; border-bottom:1px solid #ddd; }' +
+      '.pdf-page th{ text-align:left; border-bottom:2px solid #111; padding:6px 14px 6px 4px; }' +
+      '.pdf-page td{ padding:5px 14px 5px 4px; border-bottom:1px solid #ddd; }' +
       '.pdf-page td.num, .pdf-page th.num{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page td:last-child, .pdf-page th:last-child{ padding-left:16px; }' +
       '.pdf-page tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:8px; }';
 
     var contenidoHtml =
