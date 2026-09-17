@@ -786,6 +786,7 @@ function buildDbShim(fsDb){
     empleadosMultiEmpresa: [], // empleados de TODAS las empresas accesibles (solo para cumpleaños y conteos entre empresas)
     todasEmpresasAdmin: [],
     todasLicenciasAdmin: [],
+    featuresAdmin: [],
     codigosEmpresaAdmin: [],
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
@@ -866,6 +867,11 @@ function buildDbShim(fsDb){
         state.codigosEmpresaAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, function(err){ toast('No se pudo sincronizar códigos de empresa (admin): ' + err.code, true); }));
+
+      unsubscribes.push(db.collection('features').onSnapshot(function(snap){
+        state.featuresAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(err){ toast('No se pudo sincronizar actualizaciones (admin): ' + err.code, true); }));
     }
   }
 
@@ -1153,7 +1159,7 @@ function buildDbShim(fsDb){
       state.miEquipoDoc = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
-      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
+      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.featuresAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
       showLoginScreen();
     }
   });
@@ -1175,6 +1181,12 @@ function buildDbShim(fsDb){
 
   function licenciaVigente(){
     return esSuperadmin() || !!(state.licencia && state.licencia.activa === true);
+  }
+
+  // Para mejoras que solo deben verse en las empresas que el superadmin haya elegido
+  // desde Licencias -> Actualizaciones. Uso: if(tieneFeatureHabilitada('idDeLaFeature')){ ... }
+  function tieneFeatureHabilitada(featureId){
+    return !!(state.licencia && state.licencia.featuresHabilitadas && state.licencia.featuresHabilitadas[featureId] === true);
   }
 
   function renderLicenciaBloqueada(){
@@ -2833,7 +2845,21 @@ function buildDbShim(fsDb){
             '<span class="row-main"><span class="title" style="font-family:\'Courier New\',monospace;letter-spacing:.05em;">'+esc(c.id)+'</span><span class="sub">Sin usar</span></span>' +
             '<button class="icon-btn ce-borrar" data-id="'+c.id+'" title="Eliminar código"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
         }).join('') + '</div>'
-      );
+      ) +
+      '<div class="section-title"><h2>Actualizaciones (solo tú)</h2><button class="link-btn" id="nueva-actualizacion">+ Nueva</button></div>' +
+      '<p class="hint" style="margin-top:-6px;">Cuando agregues una mejora nueva a la app, regístrala aquí y elige a qué empresas dársela.</p>' +
+      '<div class="ledger" id="features-wrap">' +
+        (state.featuresAdmin.length === 0 ? '<div class="empty-state">Sin actualizaciones registradas</div>' :
+          state.featuresAdmin.slice().sort(function(a,b){ return (b.creadoEn||'').localeCompare(a.creadoEn||''); }).map(function(f){
+            var n = empresas.filter(function(em){ var l = licPorId[em.id]; return l && l.featuresHabilitadas && l.featuresHabilitadas[f.id]; }).length;
+            return '<button class="ledger-row" data-id="'+f.id+'">' +
+              '<span class="status-bar'+(n>0?' good':'')+'"></span>' +
+              '<span class="row-main"><span class="title">'+esc(f.nombre)+'</span><span class="sub">'+n+' de '+empresas.length+' empresas</span></span>' +
+              '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+            '</button>';
+          }).join('')
+        ) +
+      '</div>';
     var wrap = document.getElementById('licencias-wrap');
     if(empresas.length === 0){
       wrap.innerHTML = '<div class="empty-state">Aún no hay empresas registradas</div>';
@@ -2863,6 +2889,71 @@ function buildDbShim(fsDb){
       btn.addEventListener('click', async function(){
         if(!confirm('¿Eliminar este código?')) return;
         try{ await state.db.collection('codigosEmpresa').doc(btn.dataset.id).delete(); toast('Código eliminado'); }
+        catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
+      });
+    });
+
+    document.getElementById('nueva-actualizacion').addEventListener('click', openNuevaActualizacion);
+    wireLedgerRows(document.getElementById('features-wrap'), state.featuresAdmin, function(f){
+      openAsignarActualizacion(f, empresas, licPorId);
+    });
+  }
+
+  function openNuevaActualizacion(){
+    var body =
+      '<div class="field"><label for="fe-nombre">Nombre de la actualización</label><input id="fe-nombre" placeholder="Ej. Control de vacaciones"/></div>' +
+      '<div class="field"><label for="fe-desc">Descripción (opcional)</label><textarea id="fe-desc" placeholder="Para recordar de qué se trata"></textarea></div>' +
+      '<button class="btn btn-primary btn-block" id="fe-submit" style="margin-top:6px;">Registrar</button>';
+    openSheet('Nueva actualización', body, function(root){
+      root.querySelector('#fe-submit').addEventListener('click', async function(){
+        var nombre = root.querySelector('#fe-nombre').value.trim();
+        var descripcion = root.querySelector('#fe-desc').value.trim();
+        if(!nombre){ toast('Escribe el nombre de la actualización', true); return; }
+        try{
+          await state.db.collection('features').add({ nombre: nombre, descripcion: descripcion, creadoEn: new Date().toISOString() });
+          toast('Actualización registrada'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  function openAsignarActualizacion(feature, empresas, licPorId){
+    var body =
+      '<p class="hint" style="margin-top:0;">Elige a qué empresas darles esta actualización.</p>' +
+      '<div class="quick-actions" style="margin-bottom:10px;">' +
+        '<button class="btn btn-secondary" id="fa-marcar-todas">Marcar todas</button>' +
+        '<button class="btn btn-secondary" id="fa-desmarcar-todas">Desmarcar todas</button>' +
+      '</div>' +
+      (empresas.length === 0 ? '<div class="empty-state">Aún no hay empresas registradas</div>' :
+        empresas.map(function(em){
+          var lic = licPorId[em.id];
+          var habilitado = !!(lic && lic.featuresHabilitadas && lic.featuresHabilitadas[feature.id]);
+          return '<label class="loan-check"><input type="checkbox" class="fa-cb" data-id="'+em.id+'" '+(habilitado?'checked':'')+'/>' +
+            '<span class="lc-text"><span class="t1">'+esc(em.nombre)+'</span></span></label>';
+        }).join('')
+      ) +
+      '<button class="btn btn-primary btn-block" id="fa-guardar" style="margin-top:14px;">Guardar</button>' +
+      '<button class="btn btn-danger btn-block" id="fa-eliminar" style="margin-top:8px;">Eliminar esta actualización</button>';
+    openSheet(esc(feature.nombre), body, function(root){
+      var marcarTodasBtn = root.querySelector('#fa-marcar-todas');
+      if(marcarTodasBtn) marcarTodasBtn.addEventListener('click', function(){ root.querySelectorAll('.fa-cb').forEach(function(cb){ cb.checked = true; }); });
+      var desmarcarTodasBtn = root.querySelector('#fa-desmarcar-todas');
+      if(desmarcarTodasBtn) desmarcarTodasBtn.addEventListener('click', function(){ root.querySelectorAll('.fa-cb').forEach(function(cb){ cb.checked = false; }); });
+      root.querySelector('#fa-guardar').addEventListener('click', async function(){
+        var checks = root.querySelectorAll('.fa-cb');
+        try{
+          for(var i=0;i<checks.length;i++){
+            var cb = checks[i];
+            var campo = {};
+            campo['featuresHabilitadas.' + feature.id] = cb.checked;
+            await state.db.collection('licencias').doc(cb.dataset.id).set(campo, { merge: true });
+          }
+          toast('Actualización asignada'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+      root.querySelector('#fa-eliminar').addEventListener('click', async function(){
+        if(!confirm('¿Eliminar esta actualización de la lista? Esto no quita nada de la app, solo deja de aparecer aquí.')) return;
+        try{ await state.db.collection('features').doc(feature.id).delete(); toast('Eliminada'); closeSheet(); }
         catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
       });
     });
