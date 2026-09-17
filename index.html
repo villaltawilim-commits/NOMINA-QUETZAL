@@ -364,14 +364,13 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail,
   EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification,
-  multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver
+  sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, onSnapshot, query, orderBy, limit, where, documentId
@@ -837,6 +836,8 @@ function buildDbShim(fsDb){
     todasLicenciasAdmin: [],
     featuresAdmin: [],
     codigosEmpresaAdmin: [],
+    configSuperadmin: undefined, // undefined = aún no llega de Firestore (solo aplica al superadmin)
+    confirmacionDosPasosOk: false, // se reinicia con cada inicio de sesión nuevo
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
   };
@@ -921,6 +922,12 @@ function buildDbShim(fsDb){
         state.featuresAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, function(err){ toast('No se pudo sincronizar actualizaciones (admin): ' + err.code, true); }));
+
+      unsubscribes.push(db.collection('configSuperadmin').doc(state.authUser.uid).onSnapshot(function(snap){
+        state.configSuperadmin = snap.exists ? snap.data() : {};
+        checkProfileAndRender();
+        render();
+      }, function(err){ toast('No se pudo sincronizar tu configuración: ' + err.code, true); }));
     }
   }
 
@@ -1072,10 +1079,7 @@ function buildDbShim(fsDb){
       var pass = document.getElementById('li-pass').value;
       if(!email || !pass){ toast('Escribe tu correo y contraseña', true); return; }
       try{ await signInWithEmailAndPassword(auth, email, pass); }
-      catch(e){
-        if(e.code === 'auth/multi-factor-auth-required'){ pedirCodigo2FALogin(e); return; }
-        toast('No se pudo entrar: correo o contraseña incorrectos', true);
-      }
+      catch(e){ toast('No se pudo entrar: correo o contraseña incorrectos', true); }
     });
     document.getElementById('li-forgot').addEventListener('click', async function(){
       var email = document.getElementById('li-email').value.trim();
@@ -1086,29 +1090,6 @@ function buildDbShim(fsDb){
     document.getElementById('li-crear-cuenta').addEventListener('click', showCrearCuentaScreen);
   }
 
-  function pedirCodigo2FALogin(error){
-    var resolver = getMultiFactorResolver(auth, error);
-    showAuthScreen(
-      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
-      '<p class="tag">Verificación en dos pasos</p>' +
-      '<div class="auth-card">' +
-        '<p class="hint" style="margin-top:0;">Escribe el código de 6 dígitos de tu app autenticadora.</p>' +
-        '<div class="field"><label for="mfa-codigo">Código</label><input id="mfa-codigo" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"/></div>' +
-        '<button class="btn btn-primary btn-block" id="mfa-confirmar">Confirmar</button>' +
-        '<button class="btn btn-ghost btn-block" id="mfa-cancelar" style="margin-top:6px;">Cancelar</button>' +
-      '</div>'
-    );
-    document.getElementById('mfa-confirmar').addEventListener('click', async function(){
-      var codigo = document.getElementById('mfa-codigo').value.trim();
-      if(!/^\d{6}$/.test(codigo)){ toast('Escribe el código de 6 dígitos', true); return; }
-      try{
-        var hint = resolver.hints[0];
-        var assertion = TotpMultiFactorGenerator.assertionForSignIn(hint.uid, codigo);
-        await resolver.resolveSignIn(assertion);
-      }catch(e){ toast('Código incorrecto o expirado', true); }
-    });
-    document.getElementById('mfa-cancelar').addEventListener('click', showLoginScreen);
-  }
 
   function showCrearCuentaScreen(){
     showAuthScreen(
@@ -1230,12 +1211,82 @@ function buildDbShim(fsDb){
     document.getElementById('vc-salir').addEventListener('click', function(){ signOut(auth); });
   }
 
+  // Verificación en dos pasos por correo (solo superadmin): en vez de una app autenticadora,
+  // se envía un enlace de confirmación de Firebase al correo real de la cuenta. Al abrirlo (en
+  // el mismo navegador o en otro) se marca la confirmación en Firestore para que la pestaña que
+  // está esperando pueda continuar sola, sin que la persona tenga que volver a esa pestaña.
+  var dosPasosUnsub = null;
+  var enlaceDosPasosEnviadoPara = null;
+
+  async function enviarEnlaceDosPasos(manual){
+    var email = state.authUser.email;
+    try{
+      await sendSignInLinkToEmail(auth, email, { url: 'https://nominagt.com/', handleCodeInApp: true });
+      try{ localStorage.setItem('emailDosPasos2FA', email); }catch(e0){}
+      enlaceDosPasosEnviadoPara = email;
+      if(manual) toast('Te reenviamos el enlace de confirmación');
+    }catch(e){ toast('No se pudo enviar el enlace: '+(e.code||''), true); }
+  }
+
+  function showConfirmacionDosPasos(){
+    var email = state.authUser.email;
+    showAuthScreen(
+      '<div class="mark-big">🧾 Nómina Quetzal</div>' +
+      '<p class="tag">Verificación en dos pasos</p>' +
+      '<div class="auth-card">' +
+        '<p style="margin:0 0 14px;">Te enviamos un enlace de confirmación a <strong>'+esc(email)+'</strong>. Ábrelo (en este navegador o en cualquier dispositivo) para continuar — esta pantalla se va a actualizar sola.</p>' +
+        '<button class="btn btn-secondary btn-block" id="dp-reenviar">Reenviar enlace</button>' +
+        '<button class="btn btn-ghost btn-block" id="dp-salir" style="margin-top:8px;">Cerrar sesión</button>' +
+      '</div>'
+    );
+    document.getElementById('dp-reenviar').addEventListener('click', function(){ enviarEnlaceDosPasos(true); });
+    document.getElementById('dp-salir').addEventListener('click', function(){ signOut(auth); });
+
+    if(enlaceDosPasosEnviadoPara !== email){ enviarEnlaceDosPasos(false); }
+
+    if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
+    dosPasosUnsub = state.db.collection('confirmaciones2FA').doc(state.authUser.uid).onSnapshot(function(snap){
+      if(snap.exists){
+        marcarDosPasosConfirmado();
+        if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
+        checkProfileAndRender();
+      }
+    });
+  }
+
+  async function manejarEnlaceDosPasosSiAplica(){
+    try{
+      if(!isSignInWithEmailLink(auth, window.location.href)) return;
+      var email = null;
+      try{ email = localStorage.getItem('emailDosPasos2FA'); }catch(e0){}
+      if(!email){ toast('Abre este enlace en el mismo navegador donde iniciaste sesión', true); return; }
+      var result = await signInWithEmailLink(auth, email, window.location.href);
+      try{ localStorage.removeItem('emailDosPasos2FA'); }catch(e1){}
+      history.replaceState(null, '', window.location.pathname);
+      marcarDosPasosConfirmado();
+      try{ await state.db.collection('confirmaciones2FA').doc(result.user.uid).set({ confirmadoEn: new Date().toISOString() }); }catch(e2){}
+      checkProfileAndRender();
+    }catch(e){ toast('No se pudo confirmar el enlace: '+(e.code||''), true); }
+  }
+
+  function dosPasosConfirmadoEnEstaSesion(){
+    try{ return sessionStorage.getItem('dosPasosOk_' + state.authUser.uid) === '1'; }catch(e){ return false; }
+  }
+  function marcarDosPasosConfirmado(){
+    try{ sessionStorage.setItem('dosPasosOk_' + state.authUser.uid, '1'); }catch(e){}
+  }
+
   function checkProfileAndRender(){
     if(!state.authUser) return;
     if(state.miEquipoDoc === undefined) return; // aún no llega nuestro propio documento
+    if(esSuperadmin() && state.configSuperadmin === undefined) return; // aún no llega nuestra configuración
     var miDoc = state.miEquipoDoc;
     if(miDoc){
       if(miDoc.activo === false){ showCuentaDesactivada(); return; }
+      if(esSuperadmin() && state.configSuperadmin && state.configSuperadmin.dosPasosEmail === true && !dosPasosConfirmadoEnEstaSesion()){
+        showConfirmacionDosPasos();
+        return;
+      }
       state.session = { id: miDoc.id, nombre: miDoc.nombre, rol: miDoc.rol };
       document.getElementById('auth-screen').hidden = true;
       document.getElementById('main-shell').hidden = false;
@@ -1253,16 +1304,23 @@ function buildDbShim(fsDb){
       initFirestoreListeners();
       checkProfileAndRender();
     } else {
+      var uidSaliente = state.authUser && state.authUser.uid;
+      try{ if(uidSaliente) sessionStorage.removeItem('dosPasosOk_' + uidSaliente); }catch(e0){}
+      if(dosPasosUnsub){ dosPasosUnsub(); dosPasosUnsub = null; }
+      enlaceDosPasosEnviadoPara = null;
       teardownFirestoreListeners();
       state.authUser = null;
       state.session = null;
       state.miEquipoDoc = undefined;
+      state.configSuperadmin = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
       state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.featuresAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
       showLoginScreen();
     }
   });
+
+  manejarEnlaceDosPasosSiAplica();
 
   function updateHeaderIdentity(){
     document.getElementById('header-avatar').textContent = initials(state.session.nombre);
@@ -3499,86 +3557,26 @@ function buildDbShim(fsDb){
     renderSeguridadCuenta();
   }
 
-  function tiene2FAActiva(){
-    try{ return multiFactor(auth.currentUser).enrolledFactors.length > 0; }
-    catch(e){ return false; }
-  }
-
   function renderSeguridadCuenta(){
     var wrap = document.getElementById('seguridad-cuenta-wrap');
     if(!wrap) return;
-    var activa = tiene2FAActiva();
+    var activa = !!(state.configSuperadmin && state.configSuperadmin.dosPasosEmail === true);
     wrap.innerHTML =
       '<div class="ledger-row" style="cursor:default;">' +
         '<span class="status-bar'+(activa?' good':' warning')+'"></span>' +
-        '<span class="row-main"><span class="title">Verificación en dos pasos</span><span class="sub">'+(activa?'Activada con app autenticadora':'No activada · protege tu cuenta de superadmin')+'</span></span>' +
+        '<span class="row-main"><span class="title">Verificación en dos pasos</span><span class="sub">'+(activa?'Activada · te llega un correo cada vez que inicias sesión':'No activada · protege tu cuenta de superadmin')+'</span></span>' +
         '<button class="btn '+(activa?'btn-danger':'btn-primary')+'" id="2fa-toggle-btn" style="flex:none;">'+(activa?'Desactivar':'Activar')+'</button>' +
       '</div>';
     document.getElementById('2fa-toggle-btn').addEventListener('click', function(){
-      if(activa) requireFreshAuth(desactivar2FA);
-      else requireFreshAuth(openEnrolar2FA);
+      requireFreshAuth(function(){ toggleDosPasosEmail(!activa); });
     });
   }
 
-  async function desactivar2FA(){
+  async function toggleDosPasosEmail(activar){
     try{
-      var factores = multiFactor(auth.currentUser).enrolledFactors;
-      if(!factores.length){ toast('No tienes 2FA activada'); return; }
-      if(!confirm('¿Desactivar la verificación en dos pasos de tu cuenta?')) return;
-      await multiFactor(auth.currentUser).unenroll(factores[0]);
-      toast('Verificación en dos pasos desactivada');
-      renderSeguridadCuenta();
-    }catch(e){
-      if(e.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió, confirma tu contraseña de nuevo e inténtalo enseguida', true); return; }
-      toast('No se pudo desactivar: '+(e.code||''), true);
-    }
-  }
-
-  async function openEnrolar2FA(){
-    try{
-      await auth.currentUser.reload();
-      await auth.currentUser.getIdToken(true);
-      if(!auth.currentUser.emailVerified){
-        if(confirm('Tu correo no aparece verificado, lo cual es necesario para activar la verificación en dos pasos. ¿Reenviamos el correo de verificación ahora?')){
-          try{ await sendEmailVerification(auth.currentUser); toast('Te enviamos un correo de verificación. Ábrelo y luego vuelve a intentar activar el 2FA.'); }
-          catch(e0){ toast('No se pudo enviar el correo: '+(e0.code||''), true); }
-        }
-        return;
-      }
-      var session = await multiFactor(auth.currentUser).getSession();
-      var secret = await TotpMultiFactorGenerator.generateSecret(session);
-      var appName = 'NominaQuetzal';
-      var qrUrl = secret.generateQrCodeUrl(state.authUser.email, appName);
-      var body =
-        '<p class="hint" style="margin-top:0;">Primero instala una app gratuita de códigos en tu teléfono (Google Authenticator o Authy). Ahí, agrega una cuenta nueva escaneando este código o escribiendo la clave manual.</p>' +
-        '<div id="2fa-qr" style="display:flex;justify-content:center;margin:12px 0;"></div>' +
-        '<p class="hint" id="2fa-qr-fallback" hidden style="margin-top:0;">No se pudo dibujar el código QR aquí — usa la clave manual de abajo en tu app (opción "Ingresar clave manualmente" o "Enter setup key").</p>' +
-        '<div class="field"><label>Clave manual</label><input type="text" readonly value="'+esc(secret.secretKey)+'" style="font-family:\'Courier New\',monospace;letter-spacing:.05em;" onclick="this.select()"/></div>' +
-        '<div class="field"><label for="2fa-codigo">Código de 6 dígitos de tu app</label><input id="2fa-codigo" type="text" inputmode="numeric" maxlength="6" placeholder="123456"/><p class="hint" style="margin-bottom:0;">Este código lo genera tu app autenticadora (cambia cada 30 segundos) — no lo inventes tú.</p></div>' +
-        '<button class="btn btn-primary btn-block" id="2fa-confirmar">Confirmar y activar</button>';
-      openSheet('Vincular app autenticadora', body, function(root){
-        try{
-          if(typeof QRCode === 'undefined') throw new Error('QRCode no disponible');
-          new QRCode(root.querySelector('#2fa-qr'), { text: qrUrl, width: 180, height: 180 });
-        }catch(e2){ root.querySelector('#2fa-qr-fallback').hidden = false; }
-        root.querySelector('#2fa-confirmar').addEventListener('click', async function(){
-          var codigo = root.querySelector('#2fa-codigo').value.trim();
-          if(!/^\d{6}$/.test(codigo)){ toast('Escribe el código de 6 dígitos', true); return; }
-          try{
-            var assertion = TotpMultiFactorGenerator.assertionForEnrollment(secret, codigo);
-            await multiFactor(auth.currentUser).enroll(assertion, 'App autenticadora');
-            toast('Verificación en dos pasos activada'); closeSheet();
-            renderSeguridadCuenta();
-          }catch(e3){
-            if(e3.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió mientras llenabas esto, confirma tu contraseña de nuevo e ingresa el código enseguida', true); closeSheet(); return; }
-            toast('Código incorrecto o expirado', true);
-          }
-        });
-      });
-    }catch(e){
-      if(e.code === 'auth/requires-recent-login'){ toast('Tu sesión se enfrió, confirma tu contraseña de nuevo e inténtalo enseguida', true); return; }
-      toast('No se pudo iniciar la activación: '+(e.code||''), true);
-    }
+      await state.db.collection('configSuperadmin').doc(state.authUser.uid).set({ dosPasosEmail: activar }, { merge: true });
+      toast(activar ? 'Verificación en dos pasos activada' : 'Verificación en dos pasos desactivada');
+    }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
   }
 
   function openAsignarActualizacion(feature, empresas, licPorId){
