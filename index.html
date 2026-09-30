@@ -824,7 +824,7 @@ function buildDbShim(fsDb){
       return e.activo !== false && e.empresaId === state.empresaActualId && (!e.fechaIngreso || e.fechaIngreso <= fechaRefISO);
     });
     var pendientes = activos.filter(function(e){
-      return !state.pagos.some(function(p){ return p.empleadoId === e.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+      return estadoCoberturaPeriodo(e.id, fechaRefISO, periodoCerrado).estado === 'pendiente';
     });
     return { etiqueta: etiqueta, periodo: periodoCerrado, fecha: fechaRefISO, empleados: pendientes };
   }
@@ -834,6 +834,35 @@ function buildDbShim(fsDb){
     var anio = d.getFullYear();
     var pre = periodoTipo === 'mensual' ? 'Mensual' : (periodoTipo === 'quincena1' ? 'Q1' : 'Q2');
     return pre + " · " + mes + " " + anio;
+  }
+  // Quincena 1, quincena 2 y mensual no son formas independientes de pagar: son la MISMA plata
+  // vista de tres formas. Esta función revisa, para un empleado y un mes dados, si el periodo que
+  // se quiere pagar ya está cubierto por pagos de OTRO tipo (p. ej. un pago "mensual" ya cubre las
+  // dos quincenas, y viceversa), para nunca dejar pagar dos veces el mismo dinero. Devuelve:
+  //   {estado:'pagado', pago}   -> ya existe un pago de este MISMO tipo de periodo
+  //   {estado:'cubierto', monto}-> ya está cubierto por pago(s) de OTRO tipo, no se debe nada más
+  //   {estado:'parcial', mensaje} -> (solo al pedir "mensual") una sola quincena está pagada por
+  //                                  separado; no se puede pagar el mes completo sin duplicar
+  //   {estado:'pendiente'}     -> no hay ningún pago que lo cubra
+  function estadoCoberturaPeriodo(empleadoId, fechaISO, periodoTipo){
+    var ym = fechaISO.slice(0,7);
+    var pagosDelMes = state.pagos.filter(function(p){
+      return p.empleadoId === empleadoId && p.estado === 'pagado' && (p.fechaPago||'').slice(0,7) === ym;
+    });
+    var pagoMensual = pagosDelMes.find(function(p){ return p.periodoTipo === 'mensual'; });
+    var pagoQ1 = pagosDelMes.find(function(p){ return p.periodoTipo === 'quincena1'; });
+    var pagoQ2 = pagosDelMes.find(function(p){ return p.periodoTipo === 'quincena2'; });
+
+    if(periodoTipo === 'mensual'){
+      if(pagoMensual) return { estado: 'pagado', pago: pagoMensual };
+      if(pagoQ1 && pagoQ2) return { estado: 'cubierto', monto: round2(pagoQ1.totalNeto + pagoQ2.totalNeto) };
+      if(pagoQ1 || pagoQ2) return { estado: 'parcial', mensaje: 'Ya se pagó '+(pagoQ1?'la primera':'la segunda')+' quincena por separado; usa Quincena 1/Quincena 2 para pagar el resto' };
+      return { estado: 'pendiente' };
+    }
+    var pagoMismaQuincena = periodoTipo === 'quincena1' ? pagoQ1 : pagoQ2;
+    if(pagoMismaQuincena) return { estado: 'pagado', pago: pagoMismaQuincena };
+    if(pagoMensual) return { estado: 'cubierto', monto: pagoMensual.totalNeto };
+    return { estado: 'pendiente' };
   }
   // periodoEtiqueta() se guarda tal cual en los pagos y se usa para comparar "¿ya se pagó este
   // periodo?", así que su formato no debe cambiar. Esta función solo cambia cómo se VE en pantalla.
@@ -1954,9 +1983,9 @@ function buildDbShim(fsDb){
         var dia = parseInt(fechaDespido.slice(8,10),10) || 1;
         var periodoTipo = dia <= 15 ? 'quincena1' : 'quincena2';
         var etiqueta = periodoEtiqueta(fechaDespido, periodoTipo);
-        var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+        var cobertura = estadoCoberturaPeriodo(emp.id, fechaDespido, periodoTipo);
 
-        if(pagoExistente){
+        if(cobertura.estado === 'pagado' || cobertura.estado === 'cubierto'){
           resultadoEl.innerHTML =
             '<div class="banner">Ya existe un pago registrado para '+esc(etiquetaLegible(etiqueta))+', así que no se debe ningún monto adicional.</div>' +
             '<button class="btn btn-danger btn-block" id="df-confirmar" style="margin-top:10px;">Registrar despido sin pago adicional</button>';
@@ -2852,7 +2881,8 @@ function buildDbShim(fsDb){
 
       function computeFor(emp){
         var etiqueta = periodoEtiqueta(ctx.fecha, ctx.periodo);
-        var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+        var cobertura = estadoCoberturaPeriodo(emp.id, ctx.fecha, ctx.periodo);
+        var pagoExistente = cobertura.estado === 'pagado' ? cobertura.pago : null;
         var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
         var loanApplied = loans.filter(function(l){ return montoCuotaParaPeriodo(l, ctx.periodo) > 0; })
           .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(montoCuotaParaPeriodo(l, ctx.periodo), l.saldoPendiente)) }; });
@@ -2860,7 +2890,7 @@ function buildDbShim(fsDb){
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, ctx.fecha, ctx.periodo);
         var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
-        return { etiqueta: etiqueta, pagoExistente: pagoExistente, loanApplied: loanApplied, igssOn: igssOn, isrOn: isrOn, b: b, diasInfo: diasInfo };
+        return { etiqueta: etiqueta, pagoExistente: pagoExistente, cobertura: cobertura, loanApplied: loanApplied, igssOn: igssOn, isrOn: isrOn, b: b, diasInfo: diasInfo };
       }
 
       function renderList(){
@@ -2869,17 +2899,26 @@ function buildDbShim(fsDb){
         var pagados = 0;
         var rows = activos.map(function(e){
           var info = computeFor(e);
-          var pagado = !!info.pagoExistente;
-          if(pagado) pagados++;
-          var monto = pagado ? info.pagoExistente.totalNeto : info.b.totalNeto;
-          var subLabel = esc(e.puesto||'') + (info.diasInfo ? ' · '+info.diasInfo.diasTrabajados+'/'+info.diasInfo.diasPeriodo+' días' : '');
+          var pagado = info.cobertura.estado === 'pagado';
+          var cubierto = info.cobertura.estado === 'cubierto';
+          var parcial = info.cobertura.estado === 'parcial';
+          if(pagado || cubierto) pagados++;
+          var monto = pagado ? info.pagoExistente.totalNeto : (cubierto ? info.cobertura.monto : info.b.totalNeto);
+          var notaCobertura = cubierto
+            ? (ctx.periodo === 'mensual' ? ' · ya pagado por quincenas' : ' · ya pagado de forma mensual')
+            : (parcial ? ' · '+info.cobertura.mensaje : '');
+          var subLabel = esc(e.puesto||'') + (info.diasInfo ? ' · '+info.diasInfo.diasTrabajados+'/'+info.diasInfo.diasPeriodo+' días' : '') + notaCobertura;
           return '<div class="ledger-row pay-row">' +
-            '<span class="status-bar '+(pagado?'good':'warning')+'"></span>' +
+            '<span class="status-bar '+((pagado||cubierto)?'good':'warning')+'"></span>' +
             '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+subLabel+'</span></span>' +
-            '<span class="row-amount"><span class="amt">'+fmtQ(monto)+'</span></span>' +
+            '<span class="row-amount"><span class="amt">'+(parcial?'—':fmtQ(monto))+'</span></span>' +
             (pagado
               ? '<button class="btn btn-secondary row-action ver-firma-btn" data-emp="'+e.id+'">Ver firma</button>'
-              : '<button class="btn btn-primary row-action pagar-btn" data-emp="'+e.id+'">Pagar</button>') +
+              : cubierto
+                ? '<span class="pill pagado">Cubierto</span>'
+                : parcial
+                  ? '<span class="pill pendiente">No disponible</span>'
+                  : '<button class="btn btn-primary row-action pagar-btn" data-emp="'+e.id+'">Pagar</button>') +
           '</div>';
         }).join('');
 
