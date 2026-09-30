@@ -934,7 +934,14 @@ function buildDbShim(fsDb){
     var backdrop = document.getElementById('sheet-backdrop');
     if(!backdrop) return;
     backdrop.classList.remove('open');
-    setTimeout(function(){ document.getElementById('sheet-root').innerHTML = ''; }, 220);
+    setTimeout(function(){
+      // Solo borra el contenido si sigue montado ESTE MISMO backdrop. Si mientras tanto ya se
+      // abrió una sheet nueva (p. ej. pedir un motivo justo después de confirmar la contraseña),
+      // este borrado tardío no debe llevarse de encuentro esa sheet nueva.
+      if(document.getElementById('sheet-backdrop') === backdrop){
+        document.getElementById('sheet-root').innerHTML = '';
+      }
+    }, 220);
   }
 
   /* ============================ FIRESTORE LISTENERS ============================ */
