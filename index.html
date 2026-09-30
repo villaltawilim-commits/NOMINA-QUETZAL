@@ -1126,7 +1126,7 @@ function buildDbShim(fsDb){
       render();
     }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar préstamos: '); }));
 
-    unsubscribesEmpresa.push(db.collection('comisiones').where('empresaId','==', id).orderBy('fecha','desc').limit(300).onSnapshot(function(snap){
+    unsubscribesEmpresa.push(db.collection('comisiones').where('empresaId','==', id).orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
       state.comisiones = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
       render();
     }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar comisiones: '); }));
@@ -1594,10 +1594,12 @@ function buildDbShim(fsDb){
     var empleadosActivos = state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; });
     var ym = todayISO().slice(0,7);
     var pagosEmpresa = state.pagos.filter(function(p){ return p.empresaId === state.empresaActualId; });
+    var comisionesEmpresa = state.comisiones.filter(function(c){ return c.empresaId === state.empresaActualId; });
     var pagosMes = pagosEmpresa.filter(function(p){ return (p.fechaPago||'').slice(0,7) === ym; });
-    var netoMes = pagosMes.reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0);
+    var comisionesMes = comisionesEmpresa.filter(function(c){ return (c.fechaPago||'').slice(0,7) === ym; });
+    var netoMes = pagosMes.reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0) +
+      comisionesMes.reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
     var deduccionesMes = pagosMes.reduce(function(s,p){ return s + (Number(p.igss)||0) + (Number(p.isr)||0) + (Number(p.otrasDeducciones)||0); }, 0);
-    var recientes = pagosEmpresa.slice(0,5);
     var proy = computeProyeccionMes();
     var cumples = cumpleanosDelMes();
     var mostrarEmpresaEnCumples = empresasAccesibles().length > 1;
@@ -1606,6 +1608,15 @@ function buildDbShim(fsDb){
     var avisoLicencia = state.session.rol === 'administrador' && diasLicencia != null && diasLicencia <= 5;
     var despidosPorVencer = pagosEmpresa.filter(function(p){
       return p.tipoRegistro === 'despido' && p.estado === 'pendiente' && diasHasta(p.fechaLimitePago) != null && diasHasta(p.fechaLimitePago) <= 5;
+    });
+    var ultimosMeses = [0,1,2].map(function(i){
+      var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
+      var ymMes = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      var totalPagos = pagosEmpresa.filter(function(p){ return p.estado === 'pagado' && (p.fechaPago||'').slice(0,7) === ymMes; })
+        .reduce(function(s,p){ return s + (Number(p.totalNeto)||0); }, 0);
+      var totalComisiones = comisionesEmpresa.filter(function(c){ return (c.fechaPago||'').slice(0,7) === ymMes; })
+        .reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
+      return { etiqueta: MESES[d.getMonth()]+' '+d.getFullYear(), total: totalPagos + totalComisiones };
     });
 
     el.innerHTML =
@@ -1650,23 +1661,20 @@ function buildDbShim(fsDb){
         '<button class="btn btn-secondary" id="qa-pago">+ Registrar pago</button>' +
         '<button class="btn btn-secondary" id="qa-empleado">+ Empleado</button>' +
       '</div>' +
-      '<div class="section-title"><h2>Pagos recientes</h2><button class="link-btn" id="ver-todos-pagos">Ver todos</button></div>' +
-      '<div id="recientes-wrap"></div>';
+      '<div class="section-title"><h2>Últimos 3 meses</h2></div>' +
+      '<div class="ledger">' +
+        ultimosMeses.map(function(m){
+          return '<div class="ledger-row" style="cursor:default;"><span class="status-bar good"></span>' +
+            '<span class="row-main"><span class="title">'+esc(m.etiqueta)+'</span></span>' +
+            '<span class="row-amount"><span class="amt">'+fmtQ(m.total)+'</span></span></div>';
+        }).join('') +
+      '</div>';
 
     document.getElementById('qa-pagar-sueldos').addEventListener('click', function(){ openPagarSueldos(); });
     var pagarPendienteBtn = document.getElementById('qa-pagar-pendiente');
     if(pagarPendienteBtn) pagarPendienteBtn.addEventListener('click', function(){ openPagarSueldos(pendientesAnterior.periodo, pendientesAnterior.fecha); });
     document.getElementById('qa-pago').addEventListener('click', openPagoForm);
     document.getElementById('qa-empleado').addEventListener('click', function(){ openEmpleadoForm(null); });
-    document.getElementById('ver-todos-pagos').addEventListener('click', function(){ state.tab='nomina'; render(); });
-
-    var wrap = document.getElementById('recientes-wrap');
-    if(recientes.length === 0){
-      wrap.innerHTML = '<div class="empty-state"><div class="display">Aún no hay pagos</div>Registra el primer pago de tu equipo.</div>';
-    } else {
-      wrap.innerHTML = '<div class="ledger">' + recientes.map(pagoRowHtml).join('') + '</div>';
-      wireLedgerRows(wrap, recientes, openPagoDetail);
-    }
   }
 
   /* ============================ EMPLEADOS ============================ */
@@ -2145,7 +2153,7 @@ function buildDbShim(fsDb){
     }
     return meses.map(function(m){
       var pagosMes = state.pagos.filter(function(p){ return p.empleadoId === emp.id && p.estado === 'pagado' && (p.fechaPago||'').slice(0,7) === m.ym; });
-      var comisionesMes = state.comisiones.filter(function(c){ return c.empleadoId === emp.id && (c.fecha||'').slice(0,7) === m.ym; });
+      var comisionesMes = state.comisiones.filter(function(c){ return c.empleadoId === emp.id && (c.fechaPago||'').slice(0,7) === m.ym; });
       var vacacionesPagadasMes = state.vacaciones.filter(function(v){ return v.empleadoId === emp.id && v.tipo === 'pagados' && (v.fecha||'').slice(0,7) === m.ym; });
       var salarioBrutoTotal = pagosMes.reduce(function(s,p){ return s + (Number(p.salarioBruto)||0); }, 0);
       var comisionesTotal = comisionesMes.reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
@@ -2910,15 +2918,15 @@ function buildDbShim(fsDb){
       return !q || (c.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
     });
     var ym = todayISO().slice(0,7);
-    var totalMes = comisionesEmpresa.filter(function(c){ return (c.fecha||'').slice(0,7) === ym; })
+    var totalMes = comisionesEmpresa.filter(function(c){ return (c.fechaPago||'').slice(0,7) === ym; })
       .reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
 
     el.innerHTML =
       '<div class="view-head"><h1>Comisiones</h1><p>Pagos aparte del salario</p></div>' +
-      '<div class="banner">Las comisiones son pagos independientes: no afectan el salario, ni se incluyen en el cálculo de IGSS, ISR o la proyección de nómina.</div>' +
+      '<div class="banner">Las comisiones se suman al total de nómina de la empresa en el mes al que correspondan. No afectan el salario de cada empleado ni el cálculo de IGSS o ISR.</div>' +
       '<div class="stat-row" style="grid-template-columns:1fr 1fr;">' +
         '<div class="stat-tile"><div class="label">Comisiones (mes)</div><div class="value money">'+totalMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
-        '<div class="stat-tile"><div class="label">Registros (mes)</div><div class="value">'+comisionesEmpresa.filter(function(c){return (c.fecha||'').slice(0,7)===ym;}).length+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Registros (mes)</div><div class="value">'+comisionesEmpresa.filter(function(c){return (c.fechaPago||'').slice(0,7)===ym;}).length+'</div></div>' +
       '</div>' +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="com-search" placeholder="Buscar por empleado" value="'+esc(state.filters.comisionesQuery||'')+'"/></div>' +
       '<button class="btn btn-primary btn-block" id="qa-nueva-comision" style="margin-bottom:14px;">+ Registrar comisión</button>' +
@@ -2936,10 +2944,17 @@ function buildDbShim(fsDb){
     }
   }
 
+  function formatearMesComision(mesISO){
+    if(!mesISO || mesISO.length < 7) return mesISO || '';
+    var partes = mesISO.split('-');
+    var mesIdx = parseInt(partes[1],10) - 1;
+    return (MESES[mesIdx]||'') + ' ' + partes[0];
+  }
+
   function comisionRowHtml(c){
     return '<button class="ledger-row" data-id="'+c.id+'">' +
       '<span class="status-bar good"></span>' +
-      '<span class="row-main"><span class="title">'+esc(c.empleadoNombre)+'</span><span class="sub">'+esc(c.concepto || c.fecha)+'</span></span>' +
+      '<span class="row-main"><span class="title">'+esc(c.empleadoNombre)+'</span><span class="sub">'+esc(c.concepto ? c.concepto+' · '+formatearMesComision(c.mesCorresponde) : formatearMesComision(c.mesCorresponde))+'</span></span>' +
       '<span class="row-amount"><span class="amt">'+fmtQ(c.monto)+'</span></span>' +
       '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
     '</button>';
@@ -2953,9 +2968,10 @@ function buildDbShim(fsDb){
         activos.map(function(e){ return '<option value="'+e.id+'" '+(preseleccionado && preseleccionado.id===e.id?'selected':'')+'>'+esc(e.nombre)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label for="c-monto">Monto de la comisión (Q)</label><input id="c-monto" type="number" min="0.01" step="0.01"/></div>' +
+      '<div class="field"><label for="c-fecha">Fecha de pago</label><input id="c-fecha" type="date" value="'+todayISO()+'" required/></div>' +
+      '<div class="field"><label for="c-mes">Mes al que corresponde</label><input id="c-mes" type="month" required/></div>' +
       '<div class="field"><label for="c-concepto">Concepto (opcional)</label><input id="c-concepto" placeholder="Ej. Venta de septiembre"/></div>' +
-      '<div class="field"><label for="c-fecha">Fecha</label><input id="c-fecha" type="date" value="'+todayISO()+'"/></div>' +
-      '<p class="disclaimer">Este pago es independiente del salario: no se suma a la nómina ni afecta el cálculo de IGSS o ISR.</p>' +
+      '<p class="disclaimer">Este monto se suma al total de nómina de la empresa en el mes en que se paga. No afecta el cálculo de IGSS o ISR de ningún empleado.</p>' +
       '<button class="btn btn-primary btn-block" id="c-submit" style="margin-top:6px;">Registrar comisión</button>';
     openSheet('Registrar comisión', body, function(root){
       root.querySelector('#c-submit').addEventListener('click', async function(){
@@ -2963,12 +2979,15 @@ function buildDbShim(fsDb){
         var emp = activos.find(function(e){ return e.id === empId; });
         var monto = round2(root.querySelector('#c-monto').value);
         var concepto = root.querySelector('#c-concepto').value.trim();
-        var fecha = root.querySelector('#c-fecha').value;
+        var fechaPago = root.querySelector('#c-fecha').value;
+        var mesCorresponde = root.querySelector('#c-mes').value;
         if(!monto || monto <= 0){ toast('El monto debe ser mayor a 0', true); return; }
+        if(!fechaPago){ toast('Elige la fecha de pago', true); return; }
+        if(!mesCorresponde){ toast('Elige a qué mes corresponde este pago', true); return; }
         try{
           await state.db.collection('comisiones').add({
             empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
-            monto: monto, concepto: concepto, fecha: fecha,
+            monto: monto, concepto: concepto, fechaPago: fechaPago, mesCorresponde: mesCorresponde,
             registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
           });
           toast('Comisión registrada'); closeSheet();
@@ -2981,7 +3000,8 @@ function buildDbShim(fsDb){
     var body =
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Empleado</span><span>'+esc(c.empleadoNombre)+'</span></div>' +
-        '<div class="breakdown-row"><span>Fecha</span><span>'+esc(c.fecha)+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha de pago</span><span>'+esc(c.fechaPago||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Mes al que corresponde</span><span>'+esc(formatearMesComision(c.mesCorresponde))+'</span></div>' +
         (c.concepto ? '<div class="breakdown-row"><span>Concepto</span><span>'+esc(c.concepto)+'</span></div>' : '') +
         '<div class="breakdown-row total"><span>Monto</span><span class="amt">'+fmtQ(c.monto)+'</span></div>' +
       '</div>' +
