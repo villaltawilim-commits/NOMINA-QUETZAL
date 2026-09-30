@@ -448,6 +448,11 @@ function buildDbShim(fsDb){
     d.setDate(d.getDate() + dias);
     return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   }
+  function sumarDiasAFecha(fechaISO, dias){
+    var d = new Date(fechaISO + 'T00:00:00');
+    d.setDate(d.getDate() + dias);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
   // Cada empresa nueva arranca con una prueba gratuita automática que vence sola: nadie tiene
   // que activarla a mano. Si algo falla al crearla, la empresa igual queda creada (solo que sin
   // licencia hasta que la actives tú manualmente desde Licencias).
@@ -1485,6 +1490,9 @@ function buildDbShim(fsDb){
     var pendientesAnterior = sueldosPendientesPeriodoAnterior();
     var diasLicencia = (state.licencia && state.licencia.fechaVencimiento) ? diasHasta(state.licencia.fechaVencimiento) : null;
     var avisoLicencia = state.session.rol === 'administrador' && diasLicencia != null && diasLicencia <= 5;
+    var despidosPorVencer = pagosEmpresa.filter(function(p){
+      return p.tipoRegistro === 'despido' && p.estado === 'pendiente' && diasHasta(p.fechaLimitePago) != null && diasHasta(p.fechaLimitePago) <= 5;
+    });
 
     el.innerHTML =
       '<div class="view-head"><h1>Resumen</h1><p>'+esc(MESES[new Date().getMonth()])+' '+new Date().getFullYear()+'</p></div>' +
@@ -1499,6 +1507,11 @@ function buildDbShim(fsDb){
         '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesAnterior.empleados.length+' sueldo(s) sin pagar de '+esc(etiquetaLegible(pendientesAnterior.etiqueta))+': ' +
           pendientesAnterior.empleados.map(function(e){ return esc(e.nombre); }).join(', ') +
         '<button class="btn btn-danger btn-block" id="qa-pagar-pendiente" style="margin-top:8px;">Pagar ahora</button></div>'
+        : '') +
+      (despidosPorVencer.length ?
+        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+despidosPorVencer.length+' sueldo(s) de despido por vencer su plazo de pago (30 días): ' +
+          despidosPorVencer.map(function(p){ var d = diasHasta(p.fechaLimitePago); return esc(p.empleadoNombre)+' ('+(d<0?'vencido':d===0?'vence hoy':'vence en '+d+'d')+')'; }).join(', ') +
+        '</div>'
         : '') +
       (cumples.length ?
         '<div class="birthday-card"><div class="bc-title">🎂 Cumpleaños este mes</div>' +
@@ -1867,9 +1880,10 @@ function buildDbShim(fsDb){
       '<div class="section-title" style="margin-top:20px;">' +
         '<button class="btn btn-secondary" id="edit-emp">Editar</button>' +
         '<button class="btn '+(emp.activo===false?'btn-secondary':'btn-danger')+'" id="toggle-emp">'+(emp.activo===false?'Reactivar':'Archivar')+'</button>' +
+        (emp.activo===false?'':'<button class="btn btn-danger" id="despido-emp">Despido</button>') +
       '</div>' +
       '<button class="btn btn-danger btn-block" id="delete-emp" style="margin-top:8px;">Eliminar empleado</button>' +
-      '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
+      '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Despido calcula el sueldo proporcional pendiente y lo deja en "Sueldos de empleados despedidos" (Nómina) con 30 días de plazo. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
     openSheet(esc(emp.nombre), body, function(root){
       root.querySelector('#ver-historial-mensual').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openHistorialMensual(emp); }, 230); });
       var addVacBtn = root.querySelector('#add-vacacion');
@@ -1884,14 +1898,11 @@ function buildDbShim(fsDb){
       root.querySelector('#add-documento').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openDocumentoTipoPicker(emp); }, 230); });
       root.querySelector('#edit-emp').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openEmpleadoForm(emp); }, 230); });
       root.querySelector('#toggle-emp').addEventListener('click', async function(){
-        if(emp.activo === false){
-          try{ await state.db.collection('empleados').doc(emp.id).update({activo: true}); toast('Empleado reactivado'); closeSheet(); }
-          catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
-          return;
-        }
-        closeSheet();
-        setTimeout(function(){ openArchivarConCalculo(emp); }, 230);
+        try{ await state.db.collection('empleados').doc(emp.id).update({activo: emp.activo===false}); toast(emp.activo===false?'Empleado reactivado':'Empleado archivado'); closeSheet(); }
+        catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
       });
+      var despidoBtn = root.querySelector('#despido-emp');
+      if(despidoBtn) despidoBtn.addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openDespidoConCalculo(emp); }, 230); });
       root.querySelector('#delete-emp').addEventListener('click', async function(){
         if(!confirm('¿Eliminar definitivamente a '+emp.nombre+'? Esta acción no se puede deshacer.')) return;
         try{ await state.db.collection('empleados').doc(emp.id).delete(); toast('Empleado eliminado'); closeSheet(); }
@@ -1902,57 +1913,54 @@ function buildDbShim(fsDb){
 
   // Al archivar a alguien que sigue con una quincena sin pagar, se pregunta su último día
   // laborado y se calcula el sueldo proporcional (tomando en cuenta préstamos activos), para
-  // registrar ese pago final junto con el archivado. Si esa quincena ya tiene un pago registrado,
-  // no se debe nada adicional y solo se archiva.
-  function openArchivarConCalculo(emp){
+  // Al registrar un despido se pide la fecha en que ocurre, se calcula el sueldo proporcional
+  // que corresponde (tomando en cuenta préstamos activos) y se deja como PENDIENTE en "Sueldos de
+  // empleados despedidos" (pestaña Nómina), con un plazo de pago de 30 días desde el despido. Si
+  // esa quincena ya tiene un pago registrado, no se debe nada adicional y solo se marca el despido.
+  var DIAS_PLAZO_PAGO_DESPIDO = 30;
+  function openDespidoConCalculo(emp){
     var body =
-      '<p class="hint" style="margin-top:0;">Para saber si se le debe algún sueldo proporcional, indica su último día laborado.</p>' +
-      '<div class="field"><label for="af-fecha">Último día laborado</label><input id="af-fecha" type="date" value="'+todayISO()+'" '+(emp.fechaIngreso?'min="'+esc(emp.fechaIngreso)+'"':'')+'/></div>' +
-      '<div id="af-resultado"></div>';
-    openSheet('Archivar a '+esc(emp.nombre), body, function(root){
-      var resultadoEl = root.querySelector('#af-resultado');
+      '<p class="hint" style="margin-top:0;">Indica la fecha del despido para calcular el sueldo proporcional que corresponde.</p>' +
+      '<div class="field"><label for="df-fecha">Fecha del despido</label><input id="df-fecha" type="date" value="'+todayISO()+'" '+(emp.fechaIngreso?'min="'+esc(emp.fechaIngreso)+'"':'')+'/></div>' +
+      '<div id="df-resultado"></div>';
+    openSheet('Registrar despido de '+esc(emp.nombre), body, function(root){
+      var resultadoEl = root.querySelector('#df-resultado');
 
-      function confirmarArchivar(fechaSalida, pagoInfo){
+      function confirmarDespido(fechaDespido, pagoInfo){
         (async function(){
           try{
             if(pagoInfo){
               var data = Object.assign({
                 empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
                 periodoTipo: pagoInfo.periodoTipo, periodoEtiqueta: pagoInfo.etiqueta,
-                fechaPago: fechaSalida, estado: 'pagado',
+                estado: 'pendiente', tipoRegistro: 'despido',
+                fechaDespido: fechaDespido, fechaLimitePago: sumarDiasAFecha(fechaDespido, DIAS_PLAZO_PAGO_DESPIDO),
+                fechaPago: null,
                 prestamosAplicados: pagoInfo.loanApplied,
-                nota: 'Pago final por egreso del empleado',
+                nota: 'Sueldo proporcional por despido',
                 registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
               }, pagoInfo.b);
               await state.db.collection('pagos').add(data);
-              for(var i=0;i<pagoInfo.loanApplied.length;i++){
-                var la = pagoInfo.loanApplied[i];
-                var loan = state.prestamos.find(function(l){ return l.id === la.prestamoId; });
-                if(loan){
-                  var nuevoSaldo = round2(loan.saldoPendiente - la.monto);
-                  await state.db.collection('prestamos').doc(loan.id).update({ saldoPendiente: Math.max(0,nuevoSaldo), estado: nuevoSaldo <= 0.01 ? 'pagado' : 'activo' });
-                }
-              }
             }
-            await state.db.collection('empleados').doc(emp.id).update({ activo: false, fechaSalida: fechaSalida });
-            toast('Empleado archivado'+(pagoInfo?' y pago final registrado':''));
+            await state.db.collection('empleados').doc(emp.id).update({ activo: false, fechaSalida: fechaDespido, motivoSalida: 'despido' });
+            toast('Despido registrado'+(pagoInfo?' — el sueldo proporcional quedó pendiente de pago':''));
             closeSheet();
-          }catch(e){ toast('No se pudo archivar: '+(e.code||''), true); }
+          }catch(e){ toast('No se pudo registrar el despido: '+(e.code||''), true); }
         })();
       }
 
       function calcular(){
-        var fechaSalida = root.querySelector('#af-fecha').value || todayISO();
-        var dia = parseInt(fechaSalida.slice(8,10),10) || 1;
+        var fechaDespido = root.querySelector('#df-fecha').value || todayISO();
+        var dia = parseInt(fechaDespido.slice(8,10),10) || 1;
         var periodoTipo = dia <= 15 ? 'quincena1' : 'quincena2';
-        var etiqueta = periodoEtiqueta(fechaSalida, periodoTipo);
+        var etiqueta = periodoEtiqueta(fechaDespido, periodoTipo);
         var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
 
         if(pagoExistente){
           resultadoEl.innerHTML =
             '<div class="banner">Ya existe un pago registrado para '+esc(etiquetaLegible(etiqueta))+', así que no se debe ningún monto adicional.</div>' +
-            '<button class="btn btn-danger btn-block" id="af-confirmar" style="margin-top:10px;">Archivar sin pago adicional</button>';
-          root.querySelector('#af-confirmar').addEventListener('click', function(){ confirmarArchivar(fechaSalida, null); });
+            '<button class="btn btn-danger btn-block" id="df-confirmar" style="margin-top:10px;">Registrar despido sin pago adicional</button>';
+          root.querySelector('#df-confirmar').addEventListener('click', function(){ confirmarDespido(fechaDespido, null); });
           return;
         }
 
@@ -1961,27 +1969,54 @@ function buildDbShim(fsDb){
           .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(montoCuotaParaPeriodo(l, periodoTipo), l.saldoPendiente)) }; });
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
-        var diasInfo = calcularDiasTrabajadosConSalida(emp.fechaIngreso, fechaSalida, periodoTipo);
+        var diasInfo = calcularDiasTrabajadosConSalida(emp.fechaIngreso, fechaDespido, periodoTipo);
         var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var fechaLimite = sumarDiasAFecha(fechaDespido, DIAS_PLAZO_PAGO_DESPIDO);
 
         resultadoEl.innerHTML =
-          '<div class="banner">Se le pagarán '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de '+esc(etiquetaLegible(etiqueta))+'.</div>' +
+          '<div class="banner">Se le debe pagar '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de '+esc(etiquetaLegible(etiqueta))+'. Plazo máximo de pago: <strong>'+esc(fechaLimite)+'</strong> (30 días después del despido).</div>' +
           '<div class="breakdown">' +
             '<div class="breakdown-row"><span>Salario proporcional</span><span class="amt">'+fmtQ(b.salarioBase)+'</span></div>' +
             '<div class="breakdown-row"><span>Bonificación proporcional</span><span class="amt">'+fmtQ(b.bonificacion)+'</span></div>' +
             (igssOn ? '<div class="breakdown-row"><span>IGSS</span><span class="amt">-'+fmtQ(b.igss)+'</span></div>' : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
             (isrOn ? '<div class="breakdown-row"><span>ISR</span><span class="amt">-'+fmtQ(b.isr)+'</span></div>' : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
             loanApplied.map(function(l){ return '<div class="breakdown-row"><span>Descuento: '+esc(l.concepto)+'</span><span class="amt">-'+fmtQ(l.monto)+'</span></div>'; }).join('') +
-            '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>' +
+            '<div class="breakdown-row total"><span>Total pendiente</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>' +
           '</div>' +
-          '<button class="btn btn-primary btn-block" id="af-confirmar" style="margin-top:10px;">Registrar pago y archivar</button>';
-        root.querySelector('#af-confirmar').addEventListener('click', function(){
-          confirmarArchivar(fechaSalida, { etiqueta: etiqueta, periodoTipo: periodoTipo, b: b, loanApplied: loanApplied });
+          '<button class="btn btn-primary btn-block" id="df-confirmar" style="margin-top:10px;">Registrar despido</button>';
+        root.querySelector('#df-confirmar').addEventListener('click', function(){
+          confirmarDespido(fechaDespido, { etiqueta: etiqueta, periodoTipo: periodoTipo, b: b, loanApplied: loanApplied });
         });
       }
 
-      root.querySelector('#af-fecha').addEventListener('change', calcular);
+      root.querySelector('#df-fecha').addEventListener('change', calcular);
       calcular();
+    });
+  }
+
+  // Marca como pagado un sueldo pendiente de despido (se llega aquí desde "Sueldos de empleados
+  // despedidos" en Nómina).
+  function openPagarDespido(pago){
+    var dias = diasHasta(pago.fechaLimitePago);
+    var vencido = dias != null && dias < 0;
+    var body =
+      '<div class="breakdown">' +
+        '<div class="breakdown-row"><span>Empleado</span><span>'+esc(pago.empleadoNombre)+'</span></div>' +
+        '<div class="breakdown-row"><span>Periodo</span><span>'+esc(etiquetaLegible(pago.periodoEtiqueta))+'</span></div>' +
+        '<div class="breakdown-row"><span>Fecha de despido</span><span>'+esc(pago.fechaDespido||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Plazo de pago</span><span'+(vencido?' style="color:var(--critical);font-weight:700;"':'')+'>'+esc(pago.fechaLimitePago||'—')+(vencido?' (vencido)':'')+'</span></div>' +
+        '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(pago.totalNeto)+'</span></div>' +
+      '</div>' +
+      '<div class="field"><label for="pd-fecha">Fecha en que se paga</label><input id="pd-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="pd-confirmar" style="margin-top:10px;">Marcar como pagado</button>';
+    openSheet('Pagar sueldo de despido', body, function(root){
+      root.querySelector('#pd-confirmar').addEventListener('click', async function(){
+        var fechaPago = root.querySelector('#pd-fecha').value || todayISO();
+        try{
+          await state.db.collection('pagos').doc(pago.id).update({ estado: 'pagado', fechaPago: fechaPago });
+          toast('Pago registrado'); closeSheet();
+        }catch(e){ toast('No se pudo registrar el pago: '+(e.code||''), true); }
+      });
     });
   }
 
@@ -2245,10 +2280,18 @@ function buildDbShim(fsDb){
       return !q || (p.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
     });
 
+    var despidosPendientes = state.pagos.filter(function(p){
+      return p.empresaId === state.empresaActualId && p.tipoRegistro === 'despido' && p.estado === 'pendiente';
+    }).sort(function(a,b){ return (a.fechaLimitePago||'').localeCompare(b.fechaLimitePago||''); });
+
     el.innerHTML =
       '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId;}).length+' pagos registrados</p></div>' +
       '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:8px;">Exportar reporte (PDF / Excel)</button>' +
       '<button class="btn btn-secondary btn-block" id="reporte-anual-btn" style="margin-bottom:12px;">Reporte anual IGSS / ISR</button>' +
+      (despidosPendientes.length ?
+        '<div class="section-title" style="margin-top:0;"><h2>Sueldos de empleados despedidos</h2></div>' +
+        '<div class="ledger" id="despidos-wrap"></div>'
+        : '') +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="pago-search" placeholder="Buscar por empleado" value="'+esc(state.filters.pagosQuery)+'"/></div>' +
       '<div class="filter-chips">' +
         chip('todos','Todos') + chip('pagado','Pagados') + chip('pendiente','Pendientes') +
@@ -2261,6 +2304,23 @@ function buildDbShim(fsDb){
     el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
     document.getElementById('exportar-nomina-btn').addEventListener('click', openExportarNomina);
     document.getElementById('reporte-anual-btn').addEventListener('click', openReporteAnualFiscal);
+
+    if(despidosPendientes.length){
+      var despidosWrap = document.getElementById('despidos-wrap');
+      despidosWrap.innerHTML = despidosPendientes.map(function(p){
+        var dias = diasHasta(p.fechaLimitePago);
+        var vencido = dias != null && dias < 0;
+        var porVencer = dias != null && dias >= 0 && dias <= 5;
+        var plazoTxt = vencido ? 'plazo vencido' : (dias === 0 ? 'vence hoy' : 'vence en '+dias+'d');
+        return '<button class="ledger-row" data-id="'+p.id+'">' +
+          '<span class="status-bar'+(vencido||porVencer?' warning':'')+'"></span>' +
+          '<span class="row-main"><span class="title">'+esc(p.empleadoNombre)+'</span><span class="sub">'+esc(etiquetaLegible(p.periodoEtiqueta))+' · '+plazoTxt+'</span></span>' +
+          '<span class="row-amount"><span class="amt">'+fmtQ(p.totalNeto)+'</span></span>' +
+          '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
+        '</button>';
+      }).join('');
+      wireLedgerRows(despidosWrap, despidosPendientes, openPagarDespido);
+    }
 
     var wrap = document.getElementById('pagos-wrap');
     if(list.length === 0){
