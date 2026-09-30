@@ -652,6 +652,22 @@ function buildDbShim(fsDb){
     if(diaIngreso > diaFin) return { diasTrabajados: 0, diasPeriodo: diasPeriodo };
     return { diasTrabajados: diaFin - diaIngreso + 1, diasPeriodo: diasPeriodo };
   }
+  // Como calcularDiasTrabajados(), pero para cuando alguien SE VA a medio periodo: cuenta los días
+  // desde el inicio de la quincena (o desde su ingreso, si entró después) hasta su último día
+  // laborado, sin pasarse del fin de la quincena.
+  function calcularDiasTrabajadosConSalida(fechaIngreso, fechaSalida, periodoTipo){
+    var diasPeriodo = periodoTipo === 'mensual' ? 30 : 15;
+    var diaInicioPeriodo = periodoTipo === 'quincena2' ? 16 : 1;
+    var diaFinPeriodo = diaInicioPeriodo + diasPeriodo - 1;
+    var diaSalida = Math.min(diaFinPeriodo, parseInt(fechaSalida.slice(8,10),10) || diaInicioPeriodo);
+    var diaInicioReal = diaInicioPeriodo;
+    if(fechaIngreso && fechaIngreso.slice(0,7) === fechaSalida.slice(0,7)){
+      var diaIngreso = parseInt(fechaIngreso.slice(8,10),10) || 1;
+      if(diaIngreso > diaInicioPeriodo) diaInicioReal = Math.min(diaIngreso, diaFinPeriodo);
+    }
+    if(diaSalida < diaInicioReal) return { diasTrabajados: 0, diasPeriodo: diasPeriodo };
+    return { diasTrabajados: diaSalida - diaInicioReal + 1, diasPeriodo: diasPeriodo };
+  }
   function empIgssActivo(emp){ return emp.igssActivo !== false; }
   function empIsrActivo(emp){ return emp.isrActivo !== false; }
   function empresasAccesibles(){
@@ -838,7 +854,7 @@ function buildDbShim(fsDb){
     equipo: [],
     empresas: [],
     empresaActualId: null,
-    licencia: null,
+    licencia: undefined, // undefined = aún no llega de Firestore; null = confirmado que no existe
     invitaciones: [],
     empleadosMultiEmpresa: [], // empleados de TODAS las empresas accesibles (solo para cumpleaños y conteos entre empresas)
     todasEmpresasAdmin: [],
@@ -994,7 +1010,7 @@ function buildDbShim(fsDb){
 
     unsubscribesEmpresa.forEach(function(u){ try{ u(); }catch(e){} });
     unsubscribesEmpresa = [];
-    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = null; state.invitaciones = []; state.vacaciones = [];
+    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = undefined; state.invitaciones = []; state.vacaciones = [];
 
     var id = state.empresaActualId;
     if(!id) return;
@@ -1427,6 +1443,13 @@ function buildDbShim(fsDb){
     sincronizarEmpresaActual();
     actualizarSuscripcionesEmpresa();
     updateHeaderIdentity();
+    // Justo tras iniciar sesión (o cambiar de empresa), la licencia todavía no ha llegado de
+    // Firestore por una fracción de segundo. Antes, ese instante se trataba como "sin licencia"
+    // y mostraba de golpe la pantalla roja de "Licencia inactiva" a CUALQUIER usuario, que luego
+    // se corregía sola en cuanto llegaban los datos reales — un parpadeo confuso e innecesario.
+    if(!esSuperadmin() && state.empresaActualId && state.tab !== 'equipo' && state.tab !== 'licencias' && state.licencia === undefined){
+      return;
+    }
     var sinEmpresa = !state.empresaActualId && state.tab !== 'equipo' && state.tab !== 'licencias';
     var licenciaOk = state.tab === 'equipo' || state.tab === 'licencias' || !state.empresaActualId || licenciaVigente();
     document.querySelectorAll('#tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === state.tab); });
@@ -1818,6 +1841,7 @@ function buildDbShim(fsDb){
         '<div class="breakdown-row"><span>Bonificación incentivo</span><span class="amt">'+fmtQ(emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION)+'</span></div>' +
         '<div class="breakdown-row"><span>Cuenta bancaria</span><span>'+esc(emp.cuentaBancaria||'—')+'</span></div>' +
         '<div class="breakdown-row"><span>Ingreso</span><span>'+esc(emp.fechaIngreso||'—')+'</span></div>' +
+        (emp.activo === false && emp.fechaSalida ? '<div class="breakdown-row"><span>Salida</span><span>'+esc(emp.fechaSalida)+'</span></div>' : '') +
         '<div class="breakdown-row"><span>Antigüedad</span><span>'+fmtAntiguedad(emp.fechaIngreso)+'</span></div>' +
         '<div class="breakdown-row"><span>IGSS</span><span>'+(igssOn?'Activado':'Desactivado')+'</span></div>' +
         '<div class="breakdown-row"><span>ISR</span><span>'+(isrOn?'Activado':'Desactivado')+'</span></div>' +
@@ -1860,14 +1884,104 @@ function buildDbShim(fsDb){
       root.querySelector('#add-documento').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openDocumentoTipoPicker(emp); }, 230); });
       root.querySelector('#edit-emp').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openEmpleadoForm(emp); }, 230); });
       root.querySelector('#toggle-emp').addEventListener('click', async function(){
-        try{ await state.db.collection('empleados').doc(emp.id).update({activo: emp.activo===false}); toast(emp.activo===false?'Empleado reactivado':'Empleado archivado'); closeSheet(); }
-        catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+        if(emp.activo === false){
+          try{ await state.db.collection('empleados').doc(emp.id).update({activo: true}); toast('Empleado reactivado'); closeSheet(); }
+          catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+          return;
+        }
+        closeSheet();
+        setTimeout(function(){ openArchivarConCalculo(emp); }, 230);
       });
       root.querySelector('#delete-emp').addEventListener('click', async function(){
         if(!confirm('¿Eliminar definitivamente a '+emp.nombre+'? Esta acción no se puede deshacer.')) return;
         try{ await state.db.collection('empleados').doc(emp.id).delete(); toast('Empleado eliminado'); closeSheet(); }
         catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
       });
+    });
+  }
+
+  // Al archivar a alguien que sigue con una quincena sin pagar, se pregunta su último día
+  // laborado y se calcula el sueldo proporcional (tomando en cuenta préstamos activos), para
+  // registrar ese pago final junto con el archivado. Si esa quincena ya tiene un pago registrado,
+  // no se debe nada adicional y solo se archiva.
+  function openArchivarConCalculo(emp){
+    var body =
+      '<p class="hint" style="margin-top:0;">Para saber si se le debe algún sueldo proporcional, indica su último día laborado.</p>' +
+      '<div class="field"><label for="af-fecha">Último día laborado</label><input id="af-fecha" type="date" value="'+todayISO()+'" '+(emp.fechaIngreso?'min="'+esc(emp.fechaIngreso)+'"':'')+'/></div>' +
+      '<div id="af-resultado"></div>';
+    openSheet('Archivar a '+esc(emp.nombre), body, function(root){
+      var resultadoEl = root.querySelector('#af-resultado');
+
+      function confirmarArchivar(fechaSalida, pagoInfo){
+        (async function(){
+          try{
+            if(pagoInfo){
+              var data = Object.assign({
+                empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+                periodoTipo: pagoInfo.periodoTipo, periodoEtiqueta: pagoInfo.etiqueta,
+                fechaPago: fechaSalida, estado: 'pagado',
+                prestamosAplicados: pagoInfo.loanApplied,
+                nota: 'Pago final por egreso del empleado',
+                registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+              }, pagoInfo.b);
+              await state.db.collection('pagos').add(data);
+              for(var i=0;i<pagoInfo.loanApplied.length;i++){
+                var la = pagoInfo.loanApplied[i];
+                var loan = state.prestamos.find(function(l){ return l.id === la.prestamoId; });
+                if(loan){
+                  var nuevoSaldo = round2(loan.saldoPendiente - la.monto);
+                  await state.db.collection('prestamos').doc(loan.id).update({ saldoPendiente: Math.max(0,nuevoSaldo), estado: nuevoSaldo <= 0.01 ? 'pagado' : 'activo' });
+                }
+              }
+            }
+            await state.db.collection('empleados').doc(emp.id).update({ activo: false, fechaSalida: fechaSalida });
+            toast('Empleado archivado'+(pagoInfo?' y pago final registrado':''));
+            closeSheet();
+          }catch(e){ toast('No se pudo archivar: '+(e.code||''), true); }
+        })();
+      }
+
+      function calcular(){
+        var fechaSalida = root.querySelector('#af-fecha').value || todayISO();
+        var dia = parseInt(fechaSalida.slice(8,10),10) || 1;
+        var periodoTipo = dia <= 15 ? 'quincena1' : 'quincena2';
+        var etiqueta = periodoEtiqueta(fechaSalida, periodoTipo);
+        var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+
+        if(pagoExistente){
+          resultadoEl.innerHTML =
+            '<div class="banner">Ya existe un pago registrado para '+esc(etiquetaLegible(etiqueta))+', así que no se debe ningún monto adicional.</div>' +
+            '<button class="btn btn-danger btn-block" id="af-confirmar" style="margin-top:10px;">Archivar sin pago adicional</button>';
+          root.querySelector('#af-confirmar').addEventListener('click', function(){ confirmarArchivar(fechaSalida, null); });
+          return;
+        }
+
+        var loans = state.prestamos.filter(function(l){ return l.empleadoId === emp.id && l.estado === 'activo'; });
+        var loanApplied = loans.filter(function(l){ return montoCuotaParaPeriodo(l, periodoTipo) > 0; })
+          .map(function(l){ return { prestamoId: l.id, concepto: l.concepto, monto: round2(Math.min(montoCuotaParaPeriodo(l, periodoTipo), l.saldoPendiente)) }; });
+        var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
+        var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
+        var diasInfo = calcularDiasTrabajadosConSalida(emp.fechaIngreso, fechaSalida, periodoTipo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+
+        resultadoEl.innerHTML =
+          '<div class="banner">Se le pagarán '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de '+esc(etiquetaLegible(etiqueta))+'.</div>' +
+          '<div class="breakdown">' +
+            '<div class="breakdown-row"><span>Salario proporcional</span><span class="amt">'+fmtQ(b.salarioBase)+'</span></div>' +
+            '<div class="breakdown-row"><span>Bonificación proporcional</span><span class="amt">'+fmtQ(b.bonificacion)+'</span></div>' +
+            (igssOn ? '<div class="breakdown-row"><span>IGSS</span><span class="amt">-'+fmtQ(b.igss)+'</span></div>' : '<div class="breakdown-row"><span>IGSS</span><span>No aplica</span></div>') +
+            (isrOn ? '<div class="breakdown-row"><span>ISR</span><span class="amt">-'+fmtQ(b.isr)+'</span></div>' : '<div class="breakdown-row"><span>ISR</span><span>No aplica</span></div>') +
+            loanApplied.map(function(l){ return '<div class="breakdown-row"><span>Descuento: '+esc(l.concepto)+'</span><span class="amt">-'+fmtQ(l.monto)+'</span></div>'; }).join('') +
+            '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(b.totalNeto)+'</span></div>' +
+          '</div>' +
+          '<button class="btn btn-primary btn-block" id="af-confirmar" style="margin-top:10px;">Registrar pago y archivar</button>';
+        root.querySelector('#af-confirmar').addEventListener('click', function(){
+          confirmarArchivar(fechaSalida, { etiqueta: etiqueta, periodoTipo: periodoTipo, b: b, loanApplied: loanApplied });
+        });
+      }
+
+      root.querySelector('#af-fecha').addEventListener('change', calcular);
+      calcular();
     });
   }
 
