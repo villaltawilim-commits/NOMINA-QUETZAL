@@ -2767,12 +2767,51 @@ function buildDbShim(fsDb){
       '</div>' +
       (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '') +
       '<div class="breakdown-row" style="padding:0 2px;margin-top:8px;"><span>Registrado por</span><span>'+esc(p.registradoPor||'—')+'</span></div>' +
-      (p.estado === 'pendiente' ? '<button class="btn btn-primary btn-block" id="marcar-pagado" style="margin-top:16px;">Marcar como pagado</button>' : '');
+      (p.estado === 'pendiente' ? '<button class="btn btn-primary btn-block" id="marcar-pagado" style="margin-top:16px;">Marcar como pagado</button>' : '') +
+      '<button class="btn btn-danger btn-block" id="eliminar-pago" style="margin-top:8px;">Eliminar pago</button>' +
+      '<p class="disclaimer">Elimina este registro si se ingresó por error. Pide tu contraseña y un motivo, y queda guardado en un registro de auditoría.</p>';
     openSheet(esc(p.empleadoNombre), body, function(root){
       var btn = root.querySelector('#marcar-pagado');
       if(btn) btn.addEventListener('click', async function(){
         try{ await state.db.collection('pagos').doc(p.id).update({estado:'pagado'}); toast('Marcado como pagado'); closeSheet(); }
         catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
+      });
+      root.querySelector('#eliminar-pago').addEventListener('click', function(){
+        requireFreshAuth(function(){ openMotivoEliminarPago(p); });
+      });
+    });
+  }
+
+  // Eliminar un pago requiere contraseña (requireFreshAuth, ya llamado antes de esta función) y un
+  // motivo obligatorio. Antes de borrarlo: si tenía descuentos de préstamos aplicados, se revierten
+  // (se suman de vuelta al saldo pendiente); y se guarda una copia con el motivo en "pagosEliminados"
+  // para no perder el rastro de por qué se corrigió.
+  function openMotivoEliminarPago(p){
+    var body =
+      '<p class="hint" style="margin-top:0;">Esta acción no se puede deshacer. Explica brevemente por qué se elimina este pago.</p>' +
+      '<div class="field"><label for="me-motivo">Motivo</label><textarea id="me-motivo" placeholder="Ej. Se registró con el monto equivocado"></textarea></div>' +
+      '<button class="btn btn-danger btn-block" id="me-confirmar">Eliminar pago definitivamente</button>';
+    openSheet('Eliminar pago de '+esc(p.empleadoNombre), body, function(root){
+      root.querySelector('#me-confirmar').addEventListener('click', async function(){
+        var motivo = root.querySelector('#me-motivo').value.trim();
+        if(!motivo){ toast('Escribe el motivo de la eliminación', true); return; }
+        try{
+          var prestamosAplicados = p.prestamosAplicados || [];
+          for(var i=0;i<prestamosAplicados.length;i++){
+            var pa = prestamosAplicados[i];
+            var loan = state.prestamos.find(function(l){ return l.id === pa.prestamoId; });
+            if(loan){
+              var nuevoSaldo = round2(loan.saldoPendiente + pa.monto);
+              await state.db.collection('prestamos').doc(loan.id).update({ saldoPendiente: nuevoSaldo, estado: 'activo' });
+            }
+          }
+          await state.db.collection('pagosEliminados').add({
+            empresaId: p.empresaId, pagoOriginal: p, motivo: motivo,
+            eliminadoPor: state.session.nombre, eliminadoEn: new Date().toISOString()
+          });
+          await state.db.collection('pagos').doc(p.id).delete();
+          toast('Pago eliminado'); closeSheet();
+        }catch(e){ toast('No se pudo eliminar: '+(e.code||''), true); }
       });
     });
   }
