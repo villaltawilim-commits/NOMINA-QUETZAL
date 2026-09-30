@@ -441,8 +441,19 @@ function buildDbShim(fsDb){
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
   var APP_VERSION = '1.1';
   var versionAutoRegistrada = false;
-  var CONTACTO_SOPORTE = 'villaltawilim@gmail.com';
   var TRIAL_DIAS = 15;
+  // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
+  // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
+  function formatearWhatsapp(wa){
+    return '+' + String(wa||'').replace(/[^0-9]/g,'');
+  }
+  function htmlContactoSoporte(){
+    var wa = state.configSoporte && state.configSoporte.whatsapp;
+    if(!wa) return '';
+    var numLimpio = String(wa).replace(/[^0-9]/g,'');
+    var texto = encodeURIComponent('Hola, necesito ayuda con mi cuenta de Nómina Quetzal.');
+    return ' Para pagos de licencia y soporte, escríbenos por WhatsApp al <a href="https://wa.me/'+numLimpio+'?text='+texto+'" target="_blank" rel="noopener">'+esc(formatearWhatsapp(wa))+'</a> (solo mensajes de texto, no llamadas).';
+  }
   function fechaMasDias(dias){
     var d = new Date();
     d.setDate(d.getDate() + dias);
@@ -896,6 +907,7 @@ function buildDbShim(fsDb){
     featuresAdmin: [],
     codigosEmpresaAdmin: [],
     configSuperadmin: undefined, // undefined = aún no llega de Firestore (solo aplica al superadmin)
+    configSoporte: {}, // {whatsapp: '50212345678'} — lo configura el superadmin desde Licencias
     confirmacionDosPasosOk: false, // se reinicia con cada inicio de sesión nuevo
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
@@ -967,6 +979,13 @@ function buildDbShim(fsDb){
       actualizarSuscripcionesPorAcceso();
       checkProfileAndRender();
     }, function(err){ if(state.authUser) toast('No se pudo sincronizar tu perfil: ' + err.code, true); }));
+
+    // El número de WhatsApp de soporte lo configura el superadmin desde Licencias, pero TODOS los
+    // usuarios necesitan leerlo para saber a dónde escribir cuando la licencia está bloqueada, etc.
+    unsubscribes.push(db.collection('configuracionGlobal').doc('soporte').onSnapshot(function(snap){
+      state.configSoporte = snap.exists ? snap.data() : {};
+      render();
+    }, function(err){}));
 
     if(esSuperadmin()){
       unsubscribes.push(db.collection('empresas').onSnapshot(function(snap){
@@ -1455,12 +1474,12 @@ function buildDbShim(fsDb){
     if(pruebaVencida(lic)){
       el.innerHTML =
         '<div class="empty-state" style="margin-top:40px;"><div class="display">Tu prueba gratuita terminó</div>' +
-        'La prueba gratuita de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> venció el '+esc(lic.fechaVencimiento)+'. Contacta al proveedor del sistema para activar tu plan y seguir usando la app.</div>';
+        'La prueba gratuita de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> venció el '+esc(lic.fechaVencimiento)+'. Contacta al proveedor del sistema para activar tu plan y seguir usando la app.'+htmlContactoSoporte()+'</div>';
       return;
     }
     el.innerHTML =
       '<div class="empty-state" style="margin-top:40px;"><div class="display">Licencia inactiva</div>' +
-      'El acceso de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> está pausado. Contacta al proveedor del sistema para activarlo.</div>';
+      'El acceso de <strong>'+esc(empresaActual().nombre||'esta empresa')+'</strong> está pausado. Contacta al proveedor del sistema para activarlo.'+htmlContactoSoporte()+'</div>';
   }
 
   function renderSinEmpresa(){
@@ -1469,7 +1488,7 @@ function buildDbShim(fsDb){
       el.innerHTML =
         '<div class="empty-state" style="margin-top:40px;"><div class="display">Aún no tienes ninguna empresa</div>' +
         'Ve a la pestaña <strong>Equipo</strong>, busca la sección <strong>Empresas</strong> y dale clic a <strong>+ Nueva</strong>. Escribe el nombre de tu empresa y créala.<br><br>' +
-        'Una vez creada, comunícate con el proveedor del sistema para que te active la licencia.</div>';
+        'Una vez creada, comunícate con el proveedor del sistema para que te active la licencia.'+htmlContactoSoporte()+'</div>';
       return;
     }
     var admins = state.equipo.filter(function(m){ return m.rol === 'administrador' && m.activo !== false; });
@@ -1536,7 +1555,7 @@ function buildDbShim(fsDb){
         '<div class="banner" style="background:#FFF4E5;color:#7A4A1A;font-weight:600;">' +
           (state.licencia.esPrueba ? '⏳ Tu prueba gratuita ' : '📋 Tu licencia ') +
           (diasLicencia < 0 ? 'venció hace '+Math.abs(diasLicencia)+' día(s)' : diasLicencia === 0 ? 'vence hoy' : 'vence en '+diasLicencia+' día(s)') +
-          ' ('+esc(state.licencia.fechaVencimiento)+'). Contacta al proveedor del sistema para renovar.' +
+          ' ('+esc(state.licencia.fechaVencimiento)+'). Contacta al proveedor del sistema para renovar.' + htmlContactoSoporte() +
         '</div>'
         : '') +
       (pendientesAnterior.empleados.length ?
@@ -3589,7 +3608,7 @@ function buildDbShim(fsDb){
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
       (esPrimera ? '<p class="disclaimer">Incluye '+TRIAL_DIAS+' días de prueba gratuita automática.</p>' :
         '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
-        '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema — contáctalo ('+esc(CONTACTO_SOPORTE)+') para obtenerlo.</p>'
+        '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema.'+htmlContactoSoporte()+'</p>'
       ) +
       '<button class="btn btn-primary btn-block" id="em-submit" style="margin-top:6px;">Crear empresa</button>';
     openSheet('Nueva empresa', body, function(root){
@@ -3744,6 +3763,12 @@ function buildDbShim(fsDb){
         '</div>'
         : '') +
       '<div class="ledger" id="licencias-wrap"></div>' +
+      '<div class="section-title"><h2>Contacto de soporte</h2></div>' +
+      '<div class="ledger-row" style="cursor:default;">' +
+        '<span class="status-bar'+(state.configSoporte.whatsapp?' good':' warning')+'"></span>' +
+        '<span class="row-main"><span class="title">WhatsApp para pagos y soporte</span><span class="sub">'+(state.configSoporte.whatsapp?esc(formatearWhatsapp(state.configSoporte.whatsapp))+' · solo texto, no llamadas':'Sin configurar')+'</span></span>' +
+        '<button class="btn btn-secondary" id="editar-whatsapp-soporte" style="flex:none;">'+(state.configSoporte.whatsapp?'Editar':'Configurar')+'</button>' +
+      '</div>' +
       '<div class="section-title"><h2>Empresas adicionales</h2><button class="link-btn" id="gen-codigo-empresa">+ Generar código</button></div>' +
       '<p class="hint" style="margin-top:-6px;">Cada cuenta solo puede crear una empresa; comparte uno de estos códigos con un cliente que necesite crear otra.</p>' +
       (codigosPendientes.length === 0 ? '<div class="empty-state">Sin códigos pendientes</div>' :
@@ -3792,6 +3817,7 @@ function buildDbShim(fsDb){
       wireLedgerRows(wrap, empresas, function(em){ openLicenciaDetalle(em, licPorId[em.id]); });
     }
 
+    document.getElementById('editar-whatsapp-soporte').addEventListener('click', openEditarWhatsappSoporte);
     document.getElementById('gen-codigo-empresa').addEventListener('click', async function(){
       var codigo = generarCodigoInvitacion();
       try{
@@ -3836,6 +3862,23 @@ function buildDbShim(fsDb){
       await state.db.collection('configSuperadmin').doc(state.authUser.uid).set({ dosPasosEmail: activar }, { merge: true });
       toast(activar ? 'Verificación en dos pasos activada' : 'Verificación en dos pasos desactivada');
     }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+  }
+
+  function openEditarWhatsappSoporte(){
+    var body =
+      '<p class="hint" style="margin-top:0;">Este número se muestra a tus clientes para pagos de licencia y soporte (solo mensajes de texto, no llamadas).</p>' +
+      '<div class="field"><label for="wa-numero">Número de WhatsApp (con código de país)</label><input id="wa-numero" placeholder="Ej. 50212345678" value="'+esc(state.configSoporte.whatsapp||'')+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="wa-guardar">Guardar</button>';
+    openSheet('WhatsApp de soporte', body, function(root){
+      root.querySelector('#wa-guardar').addEventListener('click', async function(){
+        var numero = root.querySelector('#wa-numero').value.replace(/[^0-9]/g,'');
+        if(!numero){ toast('Escribe un número válido', true); return; }
+        try{
+          await state.db.collection('configuracionGlobal').doc('soporte').set({ whatsapp: numero }, { merge: true });
+          toast('Número de WhatsApp guardado'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
   }
 
   function openAsignarActualizacion(feature, empresas, licPorId){
