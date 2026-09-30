@@ -3802,10 +3802,10 @@ function buildDbShim(fsDb){
             '<button class="icon-btn ce-borrar" data-id="'+c.id+'" title="Eliminar código"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
         }).join('') + '</div>'
       ) +
-      '<div class="section-title"><h2>Versiones de la app (solo tú)</h2></div>' +
+      '<div class="section-title"><h2>Historial de actualizaciones (solo tú)</h2></div>' +
       (ultimaVersionPendiente ?
-        '<div class="banner" style="font-weight:600;">🆕 Tenemos una nueva actualización: <strong>'+esc(ultimaVersion.nombre)+'</strong>' +
-          '<button class="btn btn-primary btn-block" id="ver-nueva-version" style="margin-top:8px;">¿A qué empresas se la aplicamos?</button></div>'
+        '<div class="banner" style="font-weight:600;">🆕 Nueva actualización publicada: <strong>'+esc(ultimaVersion.nombre)+'</strong> — ya está activa para todas las empresas automáticamente.' +
+          '<button class="btn btn-secondary btn-block" id="ver-nueva-version" style="margin-top:8px;">Llevar registro de a quién le avisé</button></div>'
         : '') +
       '<div class="ledger" id="features-wrap">' +
         (versiones.length === 0 ? '<div class="empty-state">Aún no se ha detectado ninguna versión</div>' :
@@ -3813,7 +3813,7 @@ function buildDbShim(fsDb){
             var n = empresas.filter(function(em){ var l = licPorId[em.id]; return l && l.featuresHabilitadas && l.featuresHabilitadas[f.id]; }).length;
             return '<button class="ledger-row" data-id="'+f.id+'">' +
               '<span class="status-bar'+(n>0?' good':'')+'"></span>' +
-              '<span class="row-main"><span class="title">'+esc(f.nombre)+'</span><span class="sub">'+n+' de '+empresas.length+' empresas</span></span>' +
+              '<span class="row-main"><span class="title">'+esc(f.nombre)+'</span><span class="sub">'+n+' de '+empresas.length+' empresas avisadas</span></span>' +
               '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
             '</button>';
           }).join('')
@@ -3907,7 +3907,7 @@ function buildDbShim(fsDb){
 
   function openAsignarActualizacion(feature, empresas, licPorId){
     var body =
-      '<p class="hint" style="margin-top:0;">Elige a qué empresas darles esta actualización.</p>' +
+      '<p class="hint" style="margin-top:0;">Esta actualización ya está activa para todas las empresas automáticamente — esto es solo tu registro personal de a quién ya le avisaste.</p>' +
       '<div class="quick-actions" style="margin-bottom:10px;">' +
         '<button class="btn btn-secondary" id="fa-marcar-todas">Marcar todas</button>' +
         '<button class="btn btn-secondary" id="fa-desmarcar-todas">Desmarcar todas</button>' +
@@ -3936,7 +3936,7 @@ function buildDbShim(fsDb){
             campo['featuresHabilitadas.' + feature.id] = cb.checked;
             await state.db.collection('licencias').doc(cb.dataset.id).set(campo, { merge: true });
           }
-          toast('Actualización asignada'); closeSheet();
+          toast('Registro guardado'); closeSheet();
         }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
       });
       root.querySelector('#fa-eliminar').addEventListener('click', async function(){
