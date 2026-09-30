@@ -498,7 +498,7 @@ function buildDbShim(fsDb){
           await reauthenticateWithCredential(auth.currentUser, cred);
           licenciaAuthAt = Date.now();
           closeSheet();
-          onOk();
+          setTimeout(onOk, 230);
         }catch(e){ toast('Contraseña incorrecta', true); }
       });
     });
@@ -519,7 +519,7 @@ function buildDbShim(fsDb){
           var cred = EmailAuthProvider.credential(state.authUser.email, pass);
           await reauthenticateWithCredential(auth.currentUser, cred);
           closeSheet();
-          onOk();
+          setTimeout(onOk, 230);
         }catch(e){ toast('Contraseña incorrecta', true); }
       });
     });
