@@ -443,9 +443,8 @@ function buildDbShim(fsDb){
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
   // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
-  var APP_VERSION = '1.1';
+  var APP_VERSION = '1.2';
   var versionAutoRegistrada = false;
-  var TRIAL_DIAS = 15;
   // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
   // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
   function formatearWhatsapp(wa){
@@ -482,6 +481,30 @@ function buildDbShim(fsDb){
     d.setDate(d.getDate() + dias);
     return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   }
+  function fechaMasMeses(meses){
+    var d = new Date();
+    d.setMonth(d.getMonth() + meses);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  // Meses de prueba que recibe automáticamente cada empresa nueva al registrarse — lo decide el
+  // superadmin desde Licencias (state.configLicencias.mesesPrueba); si nunca lo configuró, 1 mes.
+  function mesesPruebaConfigurados(){
+    var m = state.configLicencias && state.configLicencias.mesesPrueba;
+    return (m && m > 0) ? m : 1;
+  }
+  function textoNotaOnboarding(esCodigo){
+    if(esCodigo) return 'Se te asignará el acceso y el rol que definió quien te invitó.';
+    var meses = mesesPruebaConfigurados();
+    return 'Serás la primera persona de tu empresa, con rol Administrador, con '+meses+' mes'+(meses===1?'':'es')+' de prueba gratuita automática.';
+  }
+  // Si el superadmin cambia los meses de prueba mientras alguien ya tiene abierta la pantalla de
+  // registro, actualiza el texto sin que tenga que recargar.
+  function actualizarNotaOnboarding(){
+    var nota = document.getElementById('onb-nota');
+    if(!nota) return;
+    var esCodigo = document.querySelector('input[name=onb-modo]:checked');
+    nota.textContent = textoNotaOnboarding(esCodigo && esCodigo.value === 'codigo');
+  }
   function sumarDiasAFecha(fechaISO, dias){
     var d = new Date(fechaISO + 'T00:00:00');
     d.setDate(d.getDate() + dias);
@@ -492,9 +515,10 @@ function buildDbShim(fsDb){
   // licencia hasta que la actives tú manualmente desde Licencias).
   async function crearLicenciaPrueba(empresaId){
     try{
+      var meses = mesesPruebaConfigurados();
       await state.db.collection('licencias').doc(empresaId).set({
-        activa: true, esPrueba: true, fechaVencimiento: fechaMasDias(TRIAL_DIAS),
-        notas: 'Prueba gratuita automática de '+TRIAL_DIAS+' días', creadoEn: new Date().toISOString()
+        activa: true, esPrueba: true, fechaVencimiento: fechaMasMeses(meses),
+        notas: 'Prueba gratuita automática de '+meses+' mes'+(meses===1?'':'es'), creadoEn: new Date().toISOString()
       });
     }catch(e){}
   }
@@ -706,6 +730,41 @@ function buildDbShim(fsDb){
     }
     if(diaSalida < diaInicioReal) return { diasTrabajados: 0, diasPeriodo: diasPeriodo };
     return { diasTrabajados: diaSalida - diaInicioReal + 1, diasPeriodo: diasPeriodo };
+  }
+  // Bono 14 (Decreto 42-92) y Aguinaldo (Decreto 76-78): se calculan proporcionalmente a los días
+  // trabajados dentro de su "año de cómputo" respectivo (no el año calendario). Ninguno de los dos
+  // afecta IGSS ni ISR — están exentos por ley.
+  //   Bono 14:    1 de julio (año-1) al 30 de junio (año)   — pago único, a más tardar el 15 de julio.
+  //   Aguinaldo:  1 de diciembre (año-1) al 30 de noviembre (año) — 100% a más tardar el 15 de
+  //               diciembre, o dividido en dos partes iguales (la 2da a más tardar el 15 de enero).
+  function periodoAnual(tipo, anio){
+    return tipo === 'bono14'
+      ? { inicio: (anio-1)+'-07-01', fin: anio+'-06-30' }
+      : { inicio: (anio-1)+'-12-01', fin: anio+'-11-30' };
+  }
+  function diasTrabajadosEnPeriodoAnual(fechaIngreso, inicioPeriodo, finPeriodo, fechaCorte){
+    if(!fechaIngreso) return 0;
+    var ini = new Date(Math.max(new Date(fechaIngreso+'T00:00:00').getTime(), new Date(inicioPeriodo+'T00:00:00').getTime()));
+    var finReal = new Date(Math.min(new Date(fechaCorte+'T00:00:00').getTime(), new Date(finPeriodo+'T00:00:00').getTime()));
+    var dias = Math.round((finReal - ini) / 86400000) + 1;
+    return Math.max(0, dias);
+  }
+  function calcularMontoAnual(emp, tipo, anio, fechaCorte){
+    var periodo = periodoAnual(tipo, anio);
+    var dias = diasTrabajadosEnPeriodoAnual(emp.fechaIngreso, periodo.inicio, periodo.fin, fechaCorte);
+    var monto = round2((Number(emp.salarioBase)||0) * dias / 365);
+    return { dias: dias, diasPeriodo: 365, monto: monto, periodo: periodo };
+  }
+  function etiquetaAnual(tipo, anio, parte){
+    var base = tipo === 'bono14' ? 'Bono 14' : 'Aguinaldo';
+    if(parte) base += ' ('+parte+'/2)';
+    return base + ' · ' + anio;
+  }
+  // Aguinaldo: la ley fija el 15 de enero como plazo de la segunda mitad. Bono 14 no tiene una
+  // segunda fecha legal (es pago único por decreto) — si el cliente igual lo divide en dos, el
+  // plazo de la segunda parte queda a su criterio, con un valor por defecto editable.
+  function defaultFechaLimite2(tipo, anio){
+    return tipo === 'aguinaldo' ? (anio+1)+'-01-15' : anio+'-08-15';
   }
   function empIgssActivo(emp){ return emp.igssActivo !== false; }
   function empIsrActivo(emp){ return emp.isrActivo !== false; }
@@ -931,6 +990,7 @@ function buildDbShim(fsDb){
     codigosEmpresaAdmin: [],
     configSuperadmin: undefined, // undefined = aún no llega de Firestore (solo aplica al superadmin)
     configSoporte: {}, // {whatsapp: '50212345678'} — lo configura el superadmin desde Licencias
+    configLicencias: {}, // {mesesPrueba: 1} — cuántos meses de prueba se dan solos a cada empresa nueva
     confirmacionDosPasosOk: false, // se reinicia con cada inicio de sesión nuevo
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
@@ -1008,6 +1068,15 @@ function buildDbShim(fsDb){
     unsubscribes.push(db.collection('configuracionGlobal').doc('soporte').onSnapshot(function(snap){
       state.configSoporte = snap.exists ? snap.data() : {};
       renderTopbarWhatsapp();
+      render();
+    }, function(err){}));
+
+    // Cuántos meses de prueba gratuita recibe cada empresa nueva al registrarse, decidido por el
+    // superadmin desde Licencias (crearLicenciaPrueba lo usa). Todos lo necesitan leer porque la
+    // nota del formulario de registro muestra este número antes de crear la cuenta.
+    unsubscribes.push(db.collection('configuracionGlobal').doc('licencias').onSnapshot(function(snap){
+      state.configLicencias = snap.exists ? snap.data() : {};
+      actualizarNotaOnboarding();
       render();
     }, function(err){}));
 
@@ -1241,7 +1310,7 @@ function buildDbShim(fsDb){
         '</div>' +
         '<div id="onb-campo-nueva" class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
         '<div id="onb-campo-codigo" class="field" hidden><label for="onb-codigo">Código de invitación</label><input id="onb-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
-        '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">Serás la primera persona de tu empresa, con rol <strong>Administrador</strong>, con 15 días de prueba gratuita automática.</p>' +
+        '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">'+textoNotaOnboarding(false)+'</p>' +
         '<button class="btn btn-primary btn-block" id="onb-submit">Continuar</button>' +
       '</div>'
     );
@@ -1250,9 +1319,7 @@ function buildDbShim(fsDb){
       var esCodigo = document.querySelector('input[name=onb-modo]:checked').value === 'codigo';
       document.getElementById('onb-campo-nueva').hidden = esCodigo;
       document.getElementById('onb-campo-codigo').hidden = !esCodigo;
-      document.getElementById('onb-nota').textContent = esCodigo
-        ? 'Se te asignará el acceso y el rol que definió quien te invitó.'
-        : 'Serás la primera persona de tu empresa, con rol Administrador, con 15 días de prueba gratuita automática.';
+      document.getElementById('onb-nota').textContent = textoNotaOnboarding(esCodigo);
     }); });
     document.getElementById('onb-submit').addEventListener('click', async function(){
       var nombre = document.getElementById('onb-nombre').value.trim();
@@ -1606,8 +1673,8 @@ function buildDbShim(fsDb){
     var pendientesAnterior = sueldosPendientesPeriodoAnterior();
     var diasLicencia = (state.licencia && state.licencia.fechaVencimiento) ? diasHasta(state.licencia.fechaVencimiento) : null;
     var avisoLicencia = state.session.rol === 'administrador' && diasLicencia != null && diasLicencia <= 5;
-    var despidosPorVencer = pagosEmpresa.filter(function(p){
-      return p.tipoRegistro === 'despido' && p.estado === 'pendiente' && diasHasta(p.fechaLimitePago) != null && diasHasta(p.fechaLimitePago) <= 5;
+    var pendientesPorVencer = pagosEmpresa.filter(function(p){
+      return p.estado === 'pendiente' && p.fechaLimitePago && diasHasta(p.fechaLimitePago) != null && diasHasta(p.fechaLimitePago) <= 5;
     });
     var ultimosMeses = [0,1,2].map(function(i){
       var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
@@ -1633,9 +1700,9 @@ function buildDbShim(fsDb){
           pendientesAnterior.empleados.map(function(e){ return esc(e.nombre); }).join(', ') +
         '<button class="btn btn-danger btn-block" id="qa-pagar-pendiente" style="margin-top:8px;">Pagar ahora</button></div>'
         : '') +
-      (despidosPorVencer.length ?
-        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+despidosPorVencer.length+' sueldo(s) de despido por vencer su plazo de pago (30 días): ' +
-          despidosPorVencer.map(function(p){ var d = diasHasta(p.fechaLimitePago); return esc(p.empleadoNombre)+' ('+(d<0?'vencido':d===0?'vence hoy':'vence en '+d+'d')+')'; }).join(', ') +
+      (pendientesPorVencer.length ?
+        '<div class="banner" style="background:#FDECEC;color:#B3261E;font-weight:600;">⚠️ '+pendientesPorVencer.length+' pago(s) pendientes por vencer su plazo: ' +
+          pendientesPorVencer.map(function(p){ var d = diasHasta(p.fechaLimitePago); return esc(p.empleadoNombre)+' — '+esc(etiquetaLegible(p.periodoEtiqueta))+' ('+(d<0?'vencido':d===0?'vence hoy':'vence en '+d+'d')+')'; }).join(', ') +
         '</div>'
         : '') +
       (cumples.length ?
@@ -1948,7 +2015,7 @@ function buildDbShim(fsDb){
   }
 
   function openEmpleadoDetail(emp){
-    var historial = state.pagos.filter(function(p){ return p.empleadoId === emp.id; }).slice(0,10);
+    var historial = state.pagos.filter(function(p){ return p.empleadoId === emp.id && p.estado !== 'no_aplica'; }).slice(0,10);
     var prestamosEmp = state.prestamos.filter(function(l){ return l.empleadoId === emp.id; })
       .sort(function(a,b){ return (b.creadoEn||'').localeCompare(a.creadoEn||''); });
     var comisionesEmp = state.comisiones.filter(function(c){ return c.empleadoId === emp.id; })
@@ -2005,7 +2072,7 @@ function buildDbShim(fsDb){
         (emp.activo===false?'':'<button class="btn btn-danger" id="despido-emp">Despido</button>') +
       '</div>' +
       '<button class="btn btn-danger btn-block" id="delete-emp" style="margin-top:8px;">Eliminar empleado</button>' +
-      '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Despido calcula el sueldo proporcional pendiente y lo deja en "Sueldos de empleados despedidos" (Nómina) con 30 días de plazo. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
+      '<p class="disclaimer">Archivar solo lo oculta de la lista activa y conserva su historial de pagos. Despido calcula el sueldo proporcional pendiente y lo deja en "Pagos pendientes con plazo" (Nómina) con 30 días de plazo. Eliminar borra su ficha por completo (los pagos ya registrados quedan en el historial, pero sin poder abrir su perfil).</p>';
     openSheet(esc(emp.nombre), body, function(root){
       root.querySelector('#ver-historial-mensual').addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openHistorialMensual(emp); }, 230); });
       var addVacBtn = root.querySelector('#add-vacacion');
@@ -2118,20 +2185,22 @@ function buildDbShim(fsDb){
 
   // Marca como pagado un sueldo pendiente de despido (se llega aquí desde "Sueldos de empleados
   // despedidos" en Nómina).
-  function openPagarDespido(pago){
+  // Pantalla genérica para liquidar CUALQUIER pago que quedó pendiente con un plazo límite
+  // (sueldo de despido, o la segunda parte de aguinaldo cuando se divide en dos pagos).
+  function openPagarConPlazo(pago){
     var dias = diasHasta(pago.fechaLimitePago);
     var vencido = dias != null && dias < 0;
     var body =
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Empleado</span><span>'+esc(pago.empleadoNombre)+'</span></div>' +
-        '<div class="breakdown-row"><span>Periodo</span><span>'+esc(etiquetaLegible(pago.periodoEtiqueta))+'</span></div>' +
-        '<div class="breakdown-row"><span>Fecha de despido</span><span>'+esc(pago.fechaDespido||'—')+'</span></div>' +
+        '<div class="breakdown-row"><span>Concepto</span><span>'+esc(etiquetaLegible(pago.periodoEtiqueta))+'</span></div>' +
+        (pago.fechaDespido ? '<div class="breakdown-row"><span>Fecha de despido</span><span>'+esc(pago.fechaDespido)+'</span></div>' : '') +
         '<div class="breakdown-row"><span>Plazo de pago</span><span'+(vencido?' style="color:var(--critical);font-weight:700;"':'')+'>'+esc(pago.fechaLimitePago||'—')+(vencido?' (vencido)':'')+'</span></div>' +
         '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(pago.totalNeto)+'</span></div>' +
       '</div>' +
       '<div class="field"><label for="pd-fecha">Fecha en que se paga</label><input id="pd-fecha" type="date" value="'+todayISO()+'"/></div>' +
       '<button class="btn btn-primary btn-block" id="pd-confirmar" style="margin-top:10px;">Marcar como pagado</button>';
-    openSheet('Pagar sueldo de despido', body, function(root){
+    openSheet('Liquidar pago pendiente', body, function(root){
       root.querySelector('#pd-confirmar').addEventListener('click', async function(){
         var fechaPago = root.querySelector('#pd-fecha').value || todayISO();
         try{
@@ -2139,6 +2208,206 @@ function buildDbShim(fsDb){
           toast('Pago registrado'); closeSheet();
         }catch(e){ toast('No se pudo registrar el pago: '+(e.code||''), true); }
       });
+    });
+  }
+
+  // Pago de Bono 14 o Aguinaldo a todos los empleados activos de la empresa. El aguinaldo puede
+  // dividirse en dos partes iguales (la segunda queda pendiente con plazo al 15 de enero); el
+  // bono 14 siempre es un solo pago (la ley no contempla dividirlo).
+  function openPagarAnual(tipo){
+    var ctx = { anio: new Date().getFullYear(), partes: 1, fechaLimite2: '', cleanupSig: null };
+    var tituloTipo = tipo === 'bono14' ? 'Bono 14' : 'Aguinaldo';
+    ctx.fechaLimite2 = defaultFechaLimite2(tipo, ctx.anio);
+
+    openSheet('Pagar ' + tituloTipo, '<div id="pa-content"></div>', function(root){
+      var content = root.querySelector('#pa-content');
+
+      function computeFor(emp){
+        var parte = ctx.partes === 2 ? 1 : null;
+        var etiquetaBase = etiquetaAnual(tipo, ctx.anio, null);
+        var etiqueta = etiquetaAnual(tipo, ctx.anio, parte);
+        var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
+        var noAplicaDoc = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiquetaBase && p.estado === 'no_aplica'; });
+        var calc = calcularMontoAnual(emp, tipo, ctx.anio, todayISO());
+        var montoAPagar = parte ? round2(calc.monto / 2) : calc.monto;
+        var estado = noAplicaDoc ? 'no_aplica' : (pagoExistente ? 'pagado' : 'pendiente');
+        return { etiquetaBase: etiquetaBase, etiqueta: etiqueta, pagoExistente: pagoExistente, noAplicaDoc: noAplicaDoc, estado: estado, calc: calc, montoAPagar: montoAPagar, parte: parte };
+      }
+
+      function renderList(){
+        if(ctx.cleanupSig){ ctx.cleanupSig(); ctx.cleanupSig = null; activeSheetCleanup = null; }
+        var activos = ordenarPorIngreso(state.empleados.filter(function(e){ return e.activo !== false && e.empresaId === state.empresaActualId; }));
+        var rows = activos.map(function(e){
+          var info = computeFor(e);
+          var subLabel = esc(e.puesto||'') + ' · ' + info.calc.dias + '/365 días';
+          var accion;
+          if(info.estado === 'pagado'){
+            accion = '<span class="row-amount"><span class="amt">'+fmtQ(info.pagoExistente.totalNeto)+'</span></span>' +
+              '<button class="btn btn-secondary row-action ver-firma-btn" data-emp="'+e.id+'">Ver firma</button>';
+          } else if(info.estado === 'no_aplica'){
+            accion = '<span class="row-amount"><span class="pill pendiente">No aplica</span></span>';
+          } else {
+            accion = '<span class="row-amount"><span class="amt">'+fmtQ(info.montoAPagar)+'</span></span>' +
+              '<button class="btn btn-primary row-action pagar-btn" data-emp="'+e.id+'">Pagar</button>';
+          }
+          var statusClass = info.estado === 'pagado' ? 'good' : (info.estado === 'no_aplica' ? '' : 'warning');
+          var checkboxNoAplica = info.estado === 'pagado' ? '' :
+            '<label style="display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--ink-muted);flex-shrink:0;margin-left:8px;">' +
+              '<input type="checkbox" class="noaplica-cb" data-emp="'+e.id+'" style="width:15px;height:15px;accent-color:var(--primary);" '+(info.estado==='no_aplica'?'checked':'')+'/>No aplica' +
+            '</label>';
+          return '<div class="ledger-row pay-row">' +
+            '<span class="status-bar '+statusClass+'"></span>' +
+            '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+subLabel+'</span></span>' +
+            accion + checkboxNoAplica +
+          '</div>';
+        }).join('');
+
+        content.innerHTML =
+          '<div class="field"><label for="pa-anio">Año</label><input id="pa-anio" type="number" min="2020" max="2100" step="1" value="'+ctx.anio+'"/></div>' +
+          '<div class="field"><label>¿En cuántos pagos?</label><div class="radio-group">' +
+            '<label class="radio-chip"><input type="radio" name="pa-partes" value="1" '+(ctx.partes===1?'checked':'')+'/><span>Un pago (100%)</span></label>' +
+            '<label class="radio-chip"><input type="radio" name="pa-partes" value="2" '+(ctx.partes===2?'checked':'')+'/><span>Dos pagos (50% + 50%)</span></label>' +
+          '</div>' +
+          (tipo === 'bono14'
+            ? '<p class="hint">La ley no obliga a dividir el Bono 14 (es un pago único a más tardar el 15 de julio); si de todas formas quieres darlo en dos partes, aquí defines el plazo de la segunda.</p>'
+            : '<p class="hint">Si eliges dos pagos, la segunda mitad queda pendiente con el plazo que definas abajo (por ley, a más tardar el 15 de enero).</p>') +
+          (ctx.partes === 2 ? '<div class="field"><label for="pa-fecha2">Plazo del segundo pago</label><input id="pa-fecha2" type="date" value="'+ctx.fechaLimite2+'"/></div>' : '') +
+          '</div>' +
+          (activos.length ? '<div class="ledger">'+rows+'</div>' : '<div class="empty-state">Sin empleados activos</div>');
+
+        content.querySelector('#pa-anio').addEventListener('change', function(){
+          ctx.anio = parseInt(content.querySelector('#pa-anio').value,10) || new Date().getFullYear();
+          ctx.fechaLimite2 = defaultFechaLimite2(tipo, ctx.anio);
+          renderList();
+        });
+        var radios = content.querySelectorAll('input[name=pa-partes]');
+        radios.forEach(function(r){ r.addEventListener('change', function(){ ctx.partes = parseInt(r.value,10); renderList(); }); });
+        var fecha2Input = content.querySelector('#pa-fecha2');
+        if(fecha2Input){ fecha2Input.addEventListener('change', function(){ ctx.fechaLimite2 = fecha2Input.value || ctx.fechaLimite2; }); }
+
+        content.querySelectorAll('.pagar-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
+            if(emp) renderFirma(emp);
+          });
+        });
+        content.querySelectorAll('.ver-firma-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var emp = activos.find(function(e){ return e.id === btn.dataset.emp; });
+            var info = emp && computeFor(emp);
+            if(info && info.pagoExistente){ closeSheet(); setTimeout(function(){ openPagoDetail(info.pagoExistente); }, 230); }
+          });
+        });
+        content.querySelectorAll('.noaplica-cb').forEach(function(cb){
+          cb.addEventListener('change', async function(){
+            var emp = activos.find(function(e){ return e.id === cb.dataset.emp; });
+            if(!emp) return;
+            cb.disabled = true;
+            var info = computeFor(emp);
+            try{
+              if(cb.checked){
+                await state.db.collection('pagos').add({
+                  empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+                  periodoTipo: tipo, anio: ctx.anio, periodoEtiqueta: info.etiquetaBase,
+                  salarioBase: 0, bonificacion: 0, salarioBruto: 0, igss: 0, isr: 0, otrasDeducciones: 0, totalDeducciones: 0, totalNeto: 0,
+                  estado: 'no_aplica', fechaPago: null, firma: null,
+                  registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+                });
+              } else if(info.noAplicaDoc){
+                await state.db.collection('pagos').doc(info.noAplicaDoc.id).delete();
+              }
+              renderList();
+            }catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); cb.disabled = false; }
+          });
+        });
+      }
+
+      function renderFirma(emp){
+        var info = computeFor(emp);
+        content.innerHTML =
+          '<button class="btn btn-ghost" id="sig-volver" style="padding:4px 0;margin-bottom:8px;">‹ Volver a la lista</button>' +
+          '<div class="view-head" style="margin-bottom:10px;"><h1 style="font-size:1.2rem;">'+esc(emp.nombre)+'</h1><p>'+esc(info.etiqueta)+'</p></div>' +
+          '<div class="banner">Se le pagan '+info.calc.dias+' de 365 días del periodo ('+esc(info.calc.periodo.inicio)+' a '+esc(info.calc.periodo.fin)+').'+
+            (info.parte ? ' Esta es la primera mitad (50%); la segunda queda pendiente con plazo al '+esc(ctx.fechaLimite2)+'.' : '') +
+          '</div>' +
+          '<div class="breakdown"><div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(info.montoAPagar)+'</span></div></div>' +
+          '<div class="divider-label">Firma de recibido</div>' +
+          '<div class="signature-box"><canvas id="firma-canvas"></canvas></div>' +
+          '<div class="quick-actions" style="margin-top:10px;"><button class="btn btn-secondary btn-block" id="firma-borrar">Borrar firma</button></div>' +
+          '<p class="hint">Pide al empleado que firme aquí para confirmar que recibió su pago.</p>' +
+          '<button class="btn btn-primary btn-block" id="firma-confirmar" style="margin-top:14px;" disabled>Confirmar pago</button>';
+
+        var canvas = content.querySelector('#firma-canvas');
+        var c2d = canvas.getContext('2d');
+        var confirmBtn = content.querySelector('#firma-confirmar');
+        var hasDrawn = false, drawing = false, lastX = 0, lastY = 0;
+
+        function sizeCanvas(){
+          var rect = canvas.getBoundingClientRect();
+          canvas.width = Math.max(280, Math.round(rect.width));
+          canvas.height = 170;
+          c2d.lineWidth = 2.4; c2d.lineCap = 'round'; c2d.lineJoin = 'round'; c2d.strokeStyle = '#000000';
+        }
+        sizeCanvas();
+
+        function pos(e){ var rect = canvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
+        function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
+        function move(e){
+          if(!drawing) return;
+          e.preventDefault();
+          var p = pos(e);
+          c2d.beginPath(); c2d.moveTo(lastX, lastY); c2d.lineTo(p.x, p.y); c2d.stroke();
+          lastX = p.x; lastY = p.y;
+          if(!hasDrawn){ hasDrawn = true; confirmBtn.disabled = false; }
+        }
+        function stop(){ drawing = false; }
+        canvas.addEventListener('pointerdown', start);
+        canvas.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', stop);
+
+        ctx.cleanupSig = function(){
+          canvas.removeEventListener('pointerdown', start);
+          canvas.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', stop);
+        };
+        activeSheetCleanup = ctx.cleanupSig;
+
+        content.querySelector('#firma-borrar').addEventListener('click', function(){
+          c2d.clearRect(0, 0, canvas.width, canvas.height);
+          hasDrawn = false; confirmBtn.disabled = true;
+        });
+        content.querySelector('#sig-volver').addEventListener('click', function(){ renderList(); });
+
+        confirmBtn.addEventListener('click', async function(){
+          if(!hasDrawn) return;
+          confirmBtn.disabled = true; confirmBtn.textContent = 'Guardando…';
+          var firmaDataUrl = canvas.toDataURL('image/png');
+          var fresh = computeFor(emp);
+          try{
+            var dataBase = {
+              empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
+              periodoTipo: tipo, anio: ctx.anio,
+              salarioBase: 0, bonificacion: 0, igss: 0, isr: 0, otrasDeducciones: 0, totalDeducciones: 0,
+              diasTrabajados: { diasTrabajados: fresh.calc.dias, diasPeriodo: 365 },
+              registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
+            };
+            await state.db.collection('pagos').add(Object.assign({}, dataBase, {
+              periodoEtiqueta: fresh.etiqueta, salarioBruto: fresh.montoAPagar, totalNeto: fresh.montoAPagar,
+              fechaPago: todayISO(), estado: 'pagado', firma: firmaDataUrl, firmadoEn: new Date().toISOString()
+            }));
+            if(fresh.parte){
+              var montoParte2 = round2(fresh.calc.monto - fresh.montoAPagar);
+              await state.db.collection('pagos').add(Object.assign({}, dataBase, {
+                periodoEtiqueta: etiquetaAnual(tipo, ctx.anio, 2), salarioBruto: montoParte2, totalNeto: montoParte2,
+                estado: 'pendiente', fechaPago: null, fechaLimitePago: ctx.fechaLimite2, firma: null, firmadoEn: null
+              }));
+            }
+            toast('Pago registrado'); renderList();
+          }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); confirmBtn.disabled = false; confirmBtn.textContent = 'Confirmar pago'; }
+        });
+      }
+
+      renderList();
     });
   }
 
@@ -2398,20 +2667,25 @@ function buildDbShim(fsDb){
     var q = state.filters.pagosQuery.toLowerCase();
     var list = state.pagos.filter(function(p){
       if(p.empresaId !== state.empresaActualId) return false;
+      if(p.estado === 'no_aplica') return false;
       if(state.filters.pagosEstado !== 'todos' && p.estado !== state.filters.pagosEstado) return false;
       return !q || (p.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
     });
 
-    var despidosPendientes = state.pagos.filter(function(p){
-      return p.empresaId === state.empresaActualId && p.tipoRegistro === 'despido' && p.estado === 'pendiente';
+    var pendientesConPlazo = state.pagos.filter(function(p){
+      return p.empresaId === state.empresaActualId && p.estado === 'pendiente' && p.fechaLimitePago;
     }).sort(function(a,b){ return (a.fechaLimitePago||'').localeCompare(b.fechaLimitePago||''); });
 
     el.innerHTML =
-      '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId;}).length+' pagos registrados</p></div>' +
+      '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId && p.estado!=='no_aplica';}).length+' pagos registrados</p></div>' +
       '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:8px;">Exportar reporte (PDF / Excel)</button>' +
       '<button class="btn btn-secondary btn-block" id="reporte-anual-btn" style="margin-bottom:12px;">Reporte anual IGSS / ISR</button>' +
-      (despidosPendientes.length ?
-        '<div class="section-title" style="margin-top:0;"><h2>Sueldos de empleados despedidos</h2></div>' +
+      '<div class="quick-actions" style="margin-bottom:12px;">' +
+        '<button class="btn btn-secondary" id="pagar-bono14-btn">Pagar Bono 14</button>' +
+        '<button class="btn btn-secondary" id="pagar-aguinaldo-btn">Pagar Aguinaldo</button>' +
+      '</div>' +
+      (pendientesConPlazo.length ?
+        '<div class="section-title" style="margin-top:0;"><h2>Pagos pendientes con plazo</h2></div>' +
         '<div class="ledger" id="despidos-wrap"></div>'
         : '') +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="pago-search" placeholder="Buscar por empleado" value="'+esc(state.filters.pagosQuery)+'"/></div>' +
@@ -2426,10 +2700,12 @@ function buildDbShim(fsDb){
     el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
     document.getElementById('exportar-nomina-btn').addEventListener('click', openExportarNomina);
     document.getElementById('reporte-anual-btn').addEventListener('click', openReporteAnualFiscal);
+    document.getElementById('pagar-bono14-btn').addEventListener('click', function(){ openPagarAnual('bono14'); });
+    document.getElementById('pagar-aguinaldo-btn').addEventListener('click', function(){ openPagarAnual('aguinaldo'); });
 
-    if(despidosPendientes.length){
+    if(pendientesConPlazo.length){
       var despidosWrap = document.getElementById('despidos-wrap');
-      despidosWrap.innerHTML = despidosPendientes.map(function(p){
+      despidosWrap.innerHTML = pendientesConPlazo.map(function(p){
         var dias = diasHasta(p.fechaLimitePago);
         var vencido = dias != null && dias < 0;
         var porVencer = dias != null && dias >= 0 && dias <= 5;
@@ -2441,7 +2717,7 @@ function buildDbShim(fsDb){
           '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
         '</button>';
       }).join('');
-      wireLedgerRows(despidosWrap, despidosPendientes, openPagarDespido);
+      wireLedgerRows(despidosWrap, pendientesConPlazo, openPagarConPlazo);
     }
 
     var wrap = document.getElementById('pagos-wrap');
@@ -3685,7 +3961,7 @@ function buildDbShim(fsDb){
     var esPrimera = empresasAccesibles().length === 0;
     var body =
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
-      (esPrimera ? '<p class="disclaimer">Incluye '+TRIAL_DIAS+' días de prueba gratuita automática.</p>' :
+      (esPrimera ? '<p class="disclaimer">Incluye '+mesesPruebaConfigurados()+' mes'+(mesesPruebaConfigurados()===1?'':'es')+' de prueba gratuita automática.</p>' :
         '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
         '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema.'+htmlContactoSoporte()+'</p>'
       ) +
@@ -3842,6 +4118,13 @@ function buildDbShim(fsDb){
         '<span class="row-main"><span class="title">WhatsApp para pagos y soporte</span><span class="sub">'+(state.configSoporte.whatsapp?esc(formatearWhatsapp(state.configSoporte.whatsapp))+' · solo texto, no llamadas':'Sin configurar')+'</span></span>' +
         '<button class="btn btn-secondary" id="editar-whatsapp-soporte" style="flex:none;">'+(state.configSoporte.whatsapp?'Editar':'Configurar')+'</button>' +
       '</div>' +
+      '<div class="section-title"><h2>Prueba gratuita para nuevos registros</h2></div>' +
+      '<div class="ledger-row" style="cursor:default;">' +
+        '<span class="status-bar good"></span>' +
+        '<span class="row-main"><span class="title">Meses de prueba automáticos</span><span class="sub">Toda empresa que se registre sola recibe esto, sin que intervengas</span></span>' +
+        '<span class="row-amount"><span class="amt">'+mesesPruebaConfigurados()+' mes'+(mesesPruebaConfigurados()===1?'':'es')+'</span></span>' +
+        '<button class="btn btn-secondary" id="editar-meses-prueba" style="flex:none;">Editar</button>' +
+      '</div>' +
       '<div class="section-title"><h2>Empresas adicionales</h2><button class="link-btn" id="gen-codigo-empresa">+ Generar código</button></div>' +
       '<p class="hint" style="margin-top:-6px;">Cada cuenta solo puede crear una empresa; comparte uno de estos códigos con un cliente que necesite crear otra.</p>' +
       (codigosPendientes.length === 0 ? '<div class="empty-state">Sin códigos pendientes</div>' :
@@ -3874,6 +4157,7 @@ function buildDbShim(fsDb){
     }
 
     document.getElementById('editar-whatsapp-soporte').addEventListener('click', openEditarWhatsappSoporte);
+    document.getElementById('editar-meses-prueba').addEventListener('click', openEditarMesesPrueba);
     document.getElementById('gen-codigo-empresa').addEventListener('click', async function(){
       var codigo = generarCodigoInvitacion();
       try{
@@ -3931,6 +4215,23 @@ function buildDbShim(fsDb){
     });
   }
 
+  function openEditarMesesPrueba(){
+    var body =
+      '<p class="hint" style="margin-top:0;">Toda empresa nueva que se registre por su cuenta (sin código de invitación) recibe esta cantidad de meses de prueba gratuita de forma automática, sin que tengas que entrar a activarla.</p>' +
+      '<div class="field"><label for="mp-meses">Meses de prueba</label><input id="mp-meses" type="number" min="1" step="1" value="'+mesesPruebaConfigurados()+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="mp-guardar">Guardar</button>';
+    openSheet('Prueba gratuita para nuevos registros', body, function(root){
+      root.querySelector('#mp-guardar').addEventListener('click', async function(){
+        var meses = parseInt(root.querySelector('#mp-meses').value, 10);
+        if(!meses || meses < 1){ toast('Escribe un número de meses válido', true); return; }
+        try{
+          await state.db.collection('configuracionGlobal').doc('licencias').set({ mesesPrueba: meses }, { merge: true });
+          toast('Meses de prueba actualizados'); closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
+      });
+    });
+  }
+
   function openLicenciaDetalle(empresa, lic){
     var vencidaYa = pruebaVencida(lic);
     var body =
@@ -3939,6 +4240,10 @@ function buildDbShim(fsDb){
         '<label class="radio-chip"><input type="radio" name="lic-tipo" value="prueba" '+(lic&&lic.esPrueba?'checked':'')+'/><span>Prueba gratuita (vence sola)</span></label>' +
         '<label class="radio-chip"><input type="radio" name="lic-tipo" value="pagado" '+(!lic||!lic.esPrueba?'checked':'')+'/><span>Plan pagado</span></label>' +
       '</div></div>' +
+      '<div class="field"><label for="lic-meses">Meses de prueba a otorgar</label><div style="display:flex;gap:8px;">' +
+        '<input id="lic-meses" type="number" min="1" step="1" placeholder="Ej. 2" style="flex:1;"/>' +
+        '<button class="btn btn-secondary" id="lic-meses-aplicar" type="button" style="flex-shrink:0;">Aplicar</button>' +
+      '</div><p class="hint">Calcula la fecha de vencimiento de hoy en adelante y marca el plan como prueba gratuita; revisa el campo de abajo antes de guardar.</p></div>' +
       '<div class="field"><label>Estado</label><div class="radio-group">' +
         '<label class="radio-chip"><input type="radio" name="lic-estado" value="activa" '+(lic&&lic.activa===true?'checked':'')+'/><span>Activa</span></label>' +
         '<label class="radio-chip"><input type="radio" name="lic-estado" value="inactiva" '+(!lic||lic.activa!==true?'checked':'')+'/><span>Inactiva</span></label>' +
@@ -3950,6 +4255,16 @@ function buildDbShim(fsDb){
       '<p class="disclaimer">Este panel solo controla la licencia (vencimiento, precio y límites); no da acceso a los empleados, pagos ni documentos de esta empresa.</p>' +
       '<button class="btn btn-primary btn-block" id="lic-submit" style="margin-top:6px;">Guardar</button>';
     openSheet(esc(empresa.nombre), body, function(root){
+      root.querySelector('#lic-meses-aplicar').addEventListener('click', function(){
+        var meses = parseInt(root.querySelector('#lic-meses').value, 10);
+        if(!meses || meses < 1){ toast('Indica cuántos meses de prueba quieres dar', true); return; }
+        var d = new Date();
+        d.setMonth(d.getMonth() + meses);
+        root.querySelector('#lic-vence').value = d.toISOString().slice(0,10);
+        var pruebaRadio = root.querySelector('input[name=lic-tipo][value=prueba]');
+        if(pruebaRadio) pruebaRadio.checked = true;
+        toast('Fecha calculada: '+d.toISOString().slice(0,10)+' — recuerda guardar');
+      });
       root.querySelector('#lic-submit').addEventListener('click', function(){
         var esPrueba = root.querySelector('input[name=lic-tipo]:checked').value === 'prueba';
         var activa = root.querySelector('input[name=lic-estado]:checked').value === 'activa';
