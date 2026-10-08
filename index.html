@@ -151,6 +151,15 @@
     width:54px; height:54px; border-radius:50%; background:var(--primary); color:var(--primary-ink);
     border:none; box-shadow:var(--shadow); display:flex; align-items:center; justify-content:center; cursor:pointer;
   }
+  .fab-ayuda{
+    right:18px; bottom:calc(164px + env(safe-area-inset-bottom,0px)); z-index:15;
+    width:54px; height:54px; padding:0; overflow:hidden; background:#fff;
+    border:2px solid #fff; box-shadow:0 2px 10px rgba(20,40,90,0.35);
+  }
+  .fab-ayuda img{ display:block; width:100%; height:100%; object-fit:cover; }
+  .chat-msg{ max-width:82%; padding:9px 13px; border-radius:14px; font-size:.88rem; line-height:1.42; white-space:pre-wrap; word-break:break-word; }
+  .chat-msg.user{ align-self:flex-end; background:var(--primary); color:var(--primary-ink); }
+  .chat-msg.bot{ align-self:flex-start; background:var(--primary-tint); color:var(--ink); }
 
   /* ---------- Bottom nav ---------- */
   nav.tabbar{
@@ -330,6 +339,7 @@
     <button class="fab" id="fab-btn" title="Registrar pago" aria-label="Acción rápida">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
+    <button class="fab fab-ayuda" id="fab-ayuda-btn" title="Centro de ayuda" aria-label="Centro de ayuda"><img src="./icons/ayuda-icon.png" alt=""/></button>
 
     <nav class="tabbar" id="tabbar">
       <button data-tab="resumen" class="active">
@@ -443,7 +453,7 @@ function buildDbShim(fsDb){
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
   // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
-  var APP_VERSION = '1.2';
+  var APP_VERSION = '1.3';
   var versionAutoRegistrada = false;
   // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
   // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
@@ -476,6 +486,64 @@ function buildDbShim(fsDb){
         '</a>' +
       '</div>';
   }
+
+  // Centro de ayuda: chat con un asistente de IA (Cloud Function preguntarCentroAyuda) que conoce
+  // cómo funciona toda la app, para responder preguntas de uso con sus propias palabras. El
+  // historial vive solo en memoria de esta sesión (state.chatAyuda) — no se guarda en Firestore.
+  function openCentroAyuda(){
+    openSheet('Centro de ayuda', '<div id="ayuda-content"></div>', function(root){
+      var content = root.querySelector('#ayuda-content');
+      var ctx = { enviando: false };
+
+      function render(){
+        var lista = state.chatAyuda;
+        var msgsHtml = lista.length
+          ? lista.map(function(m){ return '<div class="chat-msg '+(m.rol==='user'?'user':'bot')+'">'+esc(m.texto)+'</div>'; }).join('')
+          : '<p class="hint" style="margin-top:0;">Pregúntame lo que necesites sobre cómo usar la app. Por ejemplo: "¿Cómo registro un pago?" o "¿Cómo pago el Bono 14?".</p>';
+        if(ctx.enviando) msgsHtml += '<div class="chat-msg bot" style="opacity:.6;">Escribiendo…</div>';
+
+        content.innerHTML =
+          '<div id="ayuda-mensajes" style="max-height:52vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-bottom:12px;padding-right:2px;">' + msgsHtml + '</div>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<input id="ayuda-input" placeholder="Escribe tu pregunta…" style="flex:1;" '+(ctx.enviando?'disabled':'')+'/>' +
+            '<button class="btn btn-primary" id="ayuda-enviar" style="flex-shrink:0;" '+(ctx.enviando?'disabled':'')+'>'+(ctx.enviando?'…':'Enviar')+'</button>' +
+          '</div>' +
+          '<p class="hint">El asistente conoce esta app, pero no sustituye a soporte para temas de pagos o errores técnicos.'+htmlContactoSoporte()+'</p>';
+
+        var caja = content.querySelector('#ayuda-mensajes');
+        caja.scrollTop = caja.scrollHeight;
+
+        var input = content.querySelector('#ayuda-input');
+        var enviarBtn = content.querySelector('#ayuda-enviar');
+        enviarBtn.addEventListener('click', enviar);
+        input.addEventListener('keydown', function(e){ if(e.key === 'Enter') enviar(); });
+        if(!ctx.enviando) input.focus();
+
+        function enviar(){
+          if(ctx.enviando) return;
+          var texto = input.value.trim();
+          if(!texto) return;
+          state.chatAyuda.push({ rol: 'user', texto: texto });
+          ctx.enviando = true;
+          render();
+          var historial = state.chatAyuda.slice(-6);
+          httpsCallable(functionsInstance, 'preguntarCentroAyuda')({ pregunta: texto, historial: historial })
+            .then(function(res){
+              state.chatAyuda.push({ rol: 'bot', texto: (res.data && res.data.respuesta) || 'No pude generar una respuesta, intenta de nuevo.' });
+            })
+            .catch(function(e){
+              var msg = e && e.code === 'functions/resource-exhausted'
+                ? 'Alcanzaste el límite de preguntas de hoy. Intenta de nuevo mañana.'
+                : 'No se pudo conectar con el asistente, intenta de nuevo en un momento.';
+              state.chatAyuda.push({ rol: 'bot', texto: msg });
+            })
+            .finally(function(){ ctx.enviando = false; render(); });
+        }
+      }
+      render();
+    });
+  }
+
   function fechaMasDias(dias){
     var d = new Date();
     d.setDate(d.getDate() + dias);
@@ -991,6 +1059,7 @@ function buildDbShim(fsDb){
     configSuperadmin: undefined, // undefined = aún no llega de Firestore (solo aplica al superadmin)
     configSoporte: {}, // {whatsapp: '50212345678'} — lo configura el superadmin desde Licencias
     configLicencias: {}, // {mesesPrueba: 1} — cuántos meses de prueba se dan solos a cada empresa nueva
+    chatAyuda: [], // historial del Centro de ayuda en esta sesión (no se guarda en Firestore)
     confirmacionDosPasosOk: false, // se reinicia con cada inicio de sesión nuevo
     tab: "resumen",
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
@@ -4391,6 +4460,7 @@ function buildDbShim(fsDb){
     else if(state.tab === 'documentos') openDocumentoTipoPicker(null);
     else openPagoForm();
   });
+  document.getElementById('fab-ayuda-btn').addEventListener('click', openCentroAyuda);
   document.getElementById('who-btn').addEventListener('click', function(){
     if(!confirm('¿Cerrar sesión?')) return;
     signOut(auth);
