@@ -329,7 +329,6 @@
       <section id="view-resumen"></section>
       <section id="view-empleados" hidden></section>
       <section id="view-nomina" hidden></section>
-      <section id="view-comisiones" hidden></section>
       <section id="view-documentos" hidden></section>
       <section id="view-equipo" hidden></section>
       <section id="view-licencias" hidden></section>
@@ -353,10 +352,6 @@
       <button data-tab="nomina">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
         <span>Nómina</span>
-      </button>
-      <button data-tab="comisiones">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M9 11l3-3 3 3"/></svg>
-        <span>Comisiones</span>
       </button>
       <button data-tab="documentos">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M8 8h8M8 12h8"/><path d="M8 16c1-1 2-1 3 0s2 1 3 0"/></svg>
@@ -453,7 +448,7 @@ function buildDbShim(fsDb){
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
   // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
-  var APP_VERSION = '1.3';
+  var APP_VERSION = '1.4';
   var versionAutoRegistrada = false;
   // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
   // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
@@ -743,7 +738,7 @@ function buildDbShim(fsDb){
     var isrAnual = rentaImponible <= p.tope1 ? rentaImponible * p.tasa1 : (p.tope1 * p.tasa1) + (rentaImponible - p.tope1) * p.tasa2;
     return round2(isrAnual / 12);
   }
-  function calcularDesglose(salarioBaseMensual, bonificacionMensual, periodoTipo, otrasDeducciones, igssActivo, isrActivo, fraccionQuincena1, diasInfo){
+  function calcularDesglose(salarioBaseMensual, bonificacionMensual, periodoTipo, otrasDeducciones, igssActivo, isrActivo, fraccionQuincena1, diasInfo, bonoPeriodoModo){
     salarioBaseMensual = Number(salarioBaseMensual)||0;
     bonificacionMensual = Number(bonificacionMensual)||0;
     otrasDeducciones = Number(otrasDeducciones)||0;
@@ -757,7 +752,12 @@ function buildDbShim(fsDb){
     }
     var ratio = diasInfo ? (diasInfo.diasPeriodo > 0 ? diasInfo.diasTrabajados / diasInfo.diasPeriodo : 0) : 1;
     var salarioFraccion = fraccion * ratio;
-    var bonoFraccion = (periodoTipo === 'mensual' ? 1 : 0.5) * ratio;
+    var bonoFraccionBase;
+    if(periodoTipo === 'mensual') bonoFraccionBase = 1;
+    else if(bonoPeriodoModo === 'quincena1') bonoFraccionBase = (periodoTipo === 'quincena1') ? 1 : 0;
+    else if(bonoPeriodoModo === 'quincena2') bonoFraccionBase = (periodoTipo === 'quincena2') ? 1 : 0;
+    else bonoFraccionBase = 0.5;
+    var bonoFraccion = bonoFraccionBase * ratio;
     var igssMensual = igssActivo ? calcularIGSSMensual(salarioBaseMensual) : 0;
     var isrMensual = isrActivo ? calcularISRMensual(salarioBaseMensual, igssMensual) : 0;
     var salarioBase = round2(salarioBaseMensual * salarioFraccion);
@@ -910,6 +910,10 @@ function buildDbShim(fsDb){
     if(!total || emp.salarioQuincena1 == null) return 0.5;
     return Math.min(1, Math.max(0, Number(emp.salarioQuincena1)/total));
   }
+  // 'dividida' (por defecto, mitad y mitad), 'quincena1' o 'quincena2' (el 100% en una sola quincena).
+  function empBonoPeriodo(emp){
+    return (emp && emp.bonoPeriodo) || 'dividida';
+  }
   // Monto que corresponde descontar de un préstamo/descuento en un periodo dado ('quincena1'|'quincena2'|'mensual').
   // 'ambas' permite montos distintos por quincena; 'quincenal' y 'mensual' son valores de datos previos (mismo monto siempre).
   function montoCuotaParaPeriodo(l, periodo){
@@ -1042,6 +1046,7 @@ function buildDbShim(fsDb){
     miEquipoDoc: undefined, // undefined = aún no llega de Firestore; null = no existe
     empleados: [],
     pagos: [],
+    pagosCargados: false, // false hasta que llegue el primer snapshot real de pagos de la empresa activa
     prestamos: [],
     comisiones: [],
     documentos: [],
@@ -1054,6 +1059,7 @@ function buildDbShim(fsDb){
     empleadosMultiEmpresa: [], // empleados de TODAS las empresas accesibles (solo para cumpleaños y conteos entre empresas)
     todasEmpresasAdmin: [],
     todasLicenciasAdmin: [],
+    actividadEmpresasAdmin: [], // {id: empresaId, ultimaActividad, ultimoUsuario, diasActivos}
     featuresAdmin: [],
     codigosEmpresaAdmin: [],
     configSuperadmin: undefined, // undefined = aún no llega de Firestore (solo aplica al superadmin)
@@ -1062,6 +1068,7 @@ function buildDbShim(fsDb){
     chatAyuda: [], // historial del Centro de ayuda en esta sesión (no se guarda en Firestore)
     confirmacionDosPasosOk: false, // se reinicia con cada inicio de sesión nuevo
     tab: "resumen",
+    nominaSubTab: "sueldos", // 'sueldos' | 'comisiones' — sub-sección dentro de la pestaña Nómina
     filters: { empleadosQuery: "", pagosQuery: "", pagosEstado: "todos", mostrarArchivados: false, comisionesQuery: "", documentosQuery: "" }
   };
 
@@ -1160,6 +1167,8 @@ function buildDbShim(fsDb){
         render();
       }, function(err){ toast('No se pudo sincronizar licencias (admin): ' + err.code, true); }));
 
+      cargarActividadEmpresas();
+
       unsubscribes.push(db.collection('codigosEmpresa').onSnapshot(function(snap){
         state.codigosEmpresaAdmin = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
@@ -1232,7 +1241,7 @@ function buildDbShim(fsDb){
 
     unsubscribesEmpresa.forEach(function(u){ try{ u(); }catch(e){} });
     unsubscribesEmpresa = [];
-    state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = undefined; state.invitaciones = []; state.vacaciones = [];
+    state.empleados = []; state.pagos = []; state.pagosCargados = false; state.prestamos = []; state.comisiones = []; state.documentos = []; state.licencia = undefined; state.invitaciones = []; state.vacaciones = [];
 
     var id = state.empresaActualId;
     if(!id) return;
@@ -1256,6 +1265,7 @@ function buildDbShim(fsDb){
 
     unsubscribesEmpresa.push(db.collection('pagos').where('empresaId','==', id).orderBy('fechaPago','desc').limit(300).onSnapshot(function(snap){
       state.pagos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      state.pagosCargados = true;
       render();
     }, function(err){ reintentarSiEsTransitorio(err, 'No se pudo sincronizar pagos: '); }));
 
@@ -1377,7 +1387,12 @@ function buildDbShim(fsDb){
           '<label class="radio-chip"><input type="radio" name="onb-modo" value="nueva" checked/><span>Crear mi empresa</span></label>' +
           '<label class="radio-chip"><input type="radio" name="onb-modo" value="codigo"/><span>Tengo un código de invitación</span></label>' +
         '</div>' +
-        '<div id="onb-campo-nueva" class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
+        '<div id="onb-campo-nueva">' +
+          '<div class="field"><label for="onb-empresa">Nombre de tu empresa</label><input id="onb-empresa" placeholder="Ej. Importadora Viflo"/></div>' +
+          '<div class="field"><label for="onb-nombrelegal">Nombre de la S.A. o nombre del propietario</label><input id="onb-nombrelegal" placeholder="Ej. Importadora Viflo, Sociedad Anónima"/><p class="hint">Escribe el nombre exactamente como está inscrito ante la SAT según tu patente de comercio.</p></div>' +
+          '<div class="field"><label for="onb-nit">NIT de la empresa</label><input id="onb-nit" placeholder="Ej. 12345678-9"/></div>' +
+          '<div class="field"><label for="onb-direccionlegal">Dirección registrada (según patente de comercio)</label><textarea id="onb-direccionlegal" placeholder="Dirección exacta de la patente"></textarea></div>' +
+        '</div>' +
         '<div id="onb-campo-codigo" class="field" hidden><label for="onb-codigo">Código de invitación</label><input id="onb-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
         '<p class="disclaimer" style="margin-bottom:14px;" id="onb-nota">'+textoNotaOnboarding(false)+'</p>' +
         '<button class="btn btn-primary btn-block" id="onb-submit">Continuar</button>' +
@@ -1409,8 +1424,17 @@ function buildDbShim(fsDb){
           await state.db.collection('invitaciones').doc(codigo).update({ usado: true, usadoPor: nombre, usadoEn: new Date().toISOString() });
         } else {
           var empresaNombre = document.getElementById('onb-empresa').value.trim();
+          var nombreLegal = document.getElementById('onb-nombrelegal').value.trim();
+          var nit = document.getElementById('onb-nit').value.trim();
+          var direccionLegal = document.getElementById('onb-direccionlegal').value.trim();
           if(!empresaNombre){ toast('Escribe el nombre de tu empresa', true); return; }
-          var empresaRef = await state.db.collection('empresas').add({ nombre: empresaNombre, creadaPor: nombre, creadaEn: new Date().toISOString() });
+          if(!nombreLegal){ toast('Escribe el nombre legal (S.A. o propietario) según tu patente', true); return; }
+          if(!nit){ toast('Escribe el NIT de la empresa', true); return; }
+          if(!direccionLegal){ toast('Escribe la dirección registrada según tu patente', true); return; }
+          var empresaRef = await state.db.collection('empresas').add({
+            nombre: empresaNombre, nombreLegal: nombreLegal, nit: nit, direccion: direccionLegal,
+            creadaPor: nombre, creadaEn: new Date().toISOString()
+          });
           await state.db.collection('equipo').doc(state.authUser.uid).set({
             nombre: nombre, rol: 'administrador', empresasAcceso: [empresaRef.id], activo: true,
             email: state.authUser.email, creadoEn: new Date().toISOString()
@@ -1554,7 +1578,7 @@ function buildDbShim(fsDb){
       state.configSuperadmin = undefined;
       state.empleados = []; state.pagos = []; state.prestamos = []; state.comisiones = []; state.documentos = [];
       state.equipo = []; state.empresas = []; state.empresaActualId = null; state.licencia = null;
-      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.codigosEmpresaAdmin = []; state.featuresAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
+      state.todasEmpresasAdmin = []; state.todasLicenciasAdmin = []; state.actividadEmpresasAdmin = []; state.codigosEmpresaAdmin = []; state.featuresAdmin = []; state.invitaciones = []; state.empleadosMultiEmpresa = []; state.vacaciones = [];
       showLoginScreen();
     }
   });
@@ -1586,6 +1610,29 @@ function buildDbShim(fsDb){
   setInterval(verificarVersionNueva, 5 * 60 * 1000);
   document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') verificarVersionNueva(); });
   setTimeout(verificarVersionNueva, 4000);
+
+  // Métrica de uso por empresa, para que el superadmin vea en Licencias qué tan activo está cada
+  // cliente: última vez que alguien de esa empresa usó la app, y en cuántos días distintos la usó.
+  // Pasa por una Cloud Function (no se escribe directo a Firestore desde el cliente) para no tener
+  // que tocar las reglas de seguridad. Se registra al entrar y luego cada 5 minutos mientras la
+  // pestaña esté visible — no es un cronómetro exacto, es una señal de actividad suficiente para
+  // responder "¿siguen usándolo?".
+  function registrarActividad(){
+    if(!state.empresaActualId || !state.session) return;
+    httpsCallable(functionsInstance, 'registrarActividad')({ empresaId: state.empresaActualId, nombre: state.session.nombre }).catch(function(){});
+  }
+  setInterval(registrarActividad, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') registrarActividad(); });
+  setTimeout(registrarActividad, 4000);
+
+  // El superadmin la trae una vez al entrar a Licencias (no en tiempo real) para no tener que dar
+  // permisos de lectura de esta colección a todos los usuarios.
+  function cargarActividadEmpresas(){
+    httpsCallable(functionsInstance, 'obtenerActividadEmpresas')().then(function(res){
+      state.actividadEmpresasAdmin = (res.data && res.data.actividad) || [];
+      render();
+    }).catch(function(){});
+  }
 
   function updateHeaderIdentity(){
     document.getElementById('header-avatar').textContent = initials(state.session.nombre);
@@ -1709,7 +1756,7 @@ function buildDbShim(fsDb){
     var licenciaOk = state.tab === 'equipo' || state.tab === 'licencias' || !state.empresaActualId || licenciaVigente();
     document.querySelectorAll('#tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === state.tab); });
     document.getElementById('fab-btn').style.display = (sinEmpresa || !licenciaOk || state.tab === 'equipo' || state.tab === 'licencias') ? 'none' : 'flex';
-    ['resumen','empleados','nomina','comisiones','documentos','equipo','licencias','sin-empresa'].forEach(function(t){
+    ['resumen','empleados','nomina','documentos','equipo','licencias','sin-empresa'].forEach(function(t){
       document.getElementById('view-'+t).hidden = true;
     });
     if(sinEmpresa){ document.getElementById('view-sin-empresa').hidden = false; renderSinEmpresa(); return; }
@@ -1718,7 +1765,6 @@ function buildDbShim(fsDb){
     if(state.tab === 'resumen') renderResumen();
     if(state.tab === 'empleados') renderEmpleados();
     if(state.tab === 'nomina') renderNomina();
-    if(state.tab === 'comisiones') renderComisiones();
     if(state.tab === 'documentos') renderDocumentos();
     if(state.tab === 'equipo') renderEquipo();
     if(state.tab === 'licencias') renderLicenciasAdmin();
@@ -1739,7 +1785,7 @@ function buildDbShim(fsDb){
     var proy = computeProyeccionMes();
     var cumples = cumpleanosDelMes();
     var mostrarEmpresaEnCumples = empresasAccesibles().length > 1;
-    var pendientesAnterior = sueldosPendientesPeriodoAnterior();
+    var pendientesAnterior = state.pagosCargados ? sueldosPendientesPeriodoAnterior() : { empleados: [] };
     var diasLicencia = (state.licencia && state.licencia.fechaVencimiento) ? diasHasta(state.licencia.fechaVencimiento) : null;
     var avisoLicencia = state.session.rol === 'administrador' && diasLicencia != null && diasLicencia <= 5;
     var pendientesPorVencer = pagosEmpresa.filter(function(p){
@@ -1792,12 +1838,7 @@ function buildDbShim(fsDb){
         '<div class="breakdown-row"><span>Pago primera quincena</span><span class="amt">'+fmtQ(proy.totalQ1)+'</span></div>' +
         '<div class="breakdown-row"><span>Pago segunda quincena</span><span class="amt">'+fmtQ(proy.totalQ2)+'</span></div>' +
       '</div>' +
-      '<button class="btn btn-primary btn-block" id="qa-pagar-sueldos" style="margin-bottom:10px;">Pagar sueldos</button>' +
-      '<div class="quick-actions">' +
-        '<button class="btn btn-secondary" id="qa-pago">+ Registrar pago</button>' +
-        '<button class="btn btn-secondary" id="qa-empleado">+ Empleado</button>' +
-      '</div>' +
-      '<div class="section-title"><h2>Últimos 3 meses</h2></div>' +
+      '<div class="section-title" style="margin-top:14px;"><h2>Últimos 3 meses</h2></div>' +
       '<div class="ledger">' +
         ultimosMeses.map(function(m){
           return '<div class="ledger-row" style="cursor:default;"><span class="status-bar good"></span>' +
@@ -1806,11 +1847,8 @@ function buildDbShim(fsDb){
         }).join('') +
       '</div>';
 
-    document.getElementById('qa-pagar-sueldos').addEventListener('click', function(){ openPagarSueldos(); });
     var pagarPendienteBtn = document.getElementById('qa-pagar-pendiente');
     if(pagarPendienteBtn) pagarPendienteBtn.addEventListener('click', function(){ openPagarSueldos(pendientesAnterior.periodo, pendientesAnterior.fecha); });
-    document.getElementById('qa-pago').addEventListener('click', openPagoForm);
-    document.getElementById('qa-empleado').addEventListener('click', function(){ openEmpleadoForm(null); });
   }
 
   /* ============================ EMPLEADOS ============================ */
@@ -1825,6 +1863,7 @@ function buildDbShim(fsDb){
 
     el.innerHTML =
       '<div class="view-head"><h1>Empleados</h1><p>'+state.empleados.filter(function(e){return e.activo!==false && e.empresaId===state.empresaActualId;}).length+' activos</p></div>' +
+      '<button class="btn btn-primary btn-block" id="agregar-empleado-btn" style="margin-bottom:8px;">+ Agregar empleado</button>' +
       '<button class="btn btn-secondary btn-block" id="importar-empleados-btn" style="margin-bottom:12px;">Importar desde Excel/CSV</button>' +
       '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="emp-search" placeholder="Buscar por nombre o puesto" value="'+esc(state.filters.empleadosQuery)+'"/></div>' +
       '<div class="filter-chips"><button class="chip'+(state.filters.mostrarArchivados?' active':'')+'" id="chip-archivados">'+(state.filters.mostrarArchivados?'Ocultar archivados':'Mostrar archivados')+'</button></div>' +
@@ -1832,6 +1871,7 @@ function buildDbShim(fsDb){
 
     document.getElementById('emp-search').addEventListener('input', function(e){ state.filters.empleadosQuery = e.target.value; renderEmpleados(); });
     document.getElementById('chip-archivados').addEventListener('click', function(){ state.filters.mostrarArchivados = !state.filters.mostrarArchivados; renderEmpleados(); });
+    document.getElementById('agregar-empleado-btn').addEventListener('click', function(){ openEmpleadoForm(null); });
     document.getElementById('importar-empleados-btn').addEventListener('click', openImportarEmpleados);
 
     var wrap = document.getElementById('empleados-wrap');
@@ -2021,6 +2061,11 @@ function buildDbShim(fsDb){
         '<div class="field"><label for="f-salario">Salario base mensual (Q)</label><input id="f-salario" type="number" min="0" step="0.01" value="'+(existing?existing.salarioBase:'')+'" /></div>' +
         '<div class="field"><label for="f-bono">Bonificación incentivo (Q)</label><input id="f-bono" type="number" min="0" step="0.01" value="'+(existing? (existing.bonificacion!=null?existing.bonificacion:DEFAULT_BONIFICACION) : DEFAULT_BONIFICACION)+'" /></div>' +
       '</div>' +
+      '<div class="field"><label>¿En qué quincena se paga la bonificación?</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="f-bonoperiodo" value="dividida" '+(empBonoPeriodo(existing||{})==='dividida'?'checked':'')+'/><span>Dividida (mitad y mitad)</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="f-bonoperiodo" value="quincena1" '+(empBonoPeriodo(existing||{})==='quincena1'?'checked':'')+'/><span>Completa en la 1ª</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="f-bonoperiodo" value="quincena2" '+(empBonoPeriodo(existing||{})==='quincena2'?'checked':'')+'/><span>Completa en la 2ª</span></label>' +
+      '</div><p class="hint">Solo aplica cuando se paga por quincena; en pago mensual siempre va completa. Se puede cambiar cuando quieras.</p></div>' +
       '<div class="field"><label for="f-q1">Monto que recibe en la primera quincena (Q)</label><input id="f-q1" type="number" min="0" step="0.01" value="'+(existing && existing.salarioQuincena1!=null ? existing.salarioQuincena1 : '')+'" /><p class="hint" id="f-q2-hint">Segunda quincena: —</p></div>' +
       '<div class="field"><label for="f-cuenta">Cuenta bancaria (opcional)</label><input id="f-cuenta" value="'+esc(existing?existing.cuentaBancaria:'')+'" /></div>' +
       '<div class="field"><label for="f-ingreso">Fecha de ingreso</label><input id="f-ingreso" type="date" value="'+(existing?existing.fechaIngreso||'':todayISO())+'" /></div>' +
@@ -2062,6 +2107,7 @@ function buildDbShim(fsDb){
           puesto: root.querySelector('#f-puesto').value.trim(),
           salarioBase: round2(root.querySelector('#f-salario').value),
           bonificacion: round2(root.querySelector('#f-bono').value),
+          bonoPeriodo: root.querySelector('input[name=f-bonoperiodo]:checked').value,
           salarioQuincena1: round2(Math.min(Number(root.querySelector('#f-salario').value)||0, Math.max(0, Number(root.querySelector('#f-q1').value)||0))),
           cuentaBancaria: root.querySelector('#f-cuenta').value.trim(),
           fechaIngreso: root.querySelector('#f-ingreso').value,
@@ -2228,7 +2274,7 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajadosConSalida(emp.fechaIngreso, fechaDespido, periodoTipo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
         var fechaLimite = sumarDiasAFecha(fechaDespido, DIAS_PLAZO_PAGO_DESPIDO);
 
         resultadoEl.innerHTML =
@@ -2733,6 +2779,21 @@ function buildDbShim(fsDb){
   /* ============================ NOMINA (PAGOS) ============================ */
   function renderNomina(){
     var el = document.getElementById('view-nomina');
+    var subTab = state.nominaSubTab || 'sueldos';
+    var subTabsHtml =
+      '<div class="filter-chips" style="margin-bottom:12px;">' +
+        '<button class="chip'+(subTab!=='comisiones'?' active':'')+'" id="subtab-sueldos">Sueldos</button>' +
+        '<button class="chip'+(subTab==='comisiones'?' active':'')+'" id="subtab-comisiones">Comisiones</button>' +
+      '</div>';
+
+    if(subTab === 'comisiones') renderNominaComisiones(el, subTabsHtml);
+    else renderNominaSueldos(el, subTabsHtml);
+
+    el.querySelector('#subtab-sueldos').addEventListener('click', function(){ state.nominaSubTab = 'sueldos'; renderNomina(); });
+    el.querySelector('#subtab-comisiones').addEventListener('click', function(){ state.nominaSubTab = 'comisiones'; renderNomina(); });
+  }
+
+  function renderNominaSueldos(el, subTabsHtml){
     var q = state.filters.pagosQuery.toLowerCase();
     var list = state.pagos.filter(function(p){
       if(p.empresaId !== state.empresaActualId) return false;
@@ -2747,8 +2808,14 @@ function buildDbShim(fsDb){
 
     el.innerHTML =
       '<div class="view-head"><h1>Nómina</h1><p>'+state.pagos.filter(function(p){return p.empresaId===state.empresaActualId && p.estado!=='no_aplica';}).length+' pagos registrados</p></div>' +
-      '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:8px;">Exportar reporte (PDF / Excel)</button>' +
+      subTabsHtml +
+      '<button class="btn btn-primary btn-block" id="nom-pagar-sueldos" style="margin-bottom:8px;">Pagar sueldos</button>' +
+      '<button class="btn btn-secondary btn-block" id="nom-registrar-pago" style="margin-bottom:12px;">+ Registrar pago</button>' +
+      '<div class="section-title" style="margin-top:0;"><h2>Reportes</h2></div>' +
+      '<button class="btn btn-secondary btn-block" id="exportar-nomina-btn" style="margin-bottom:8px;">Planilla de sueldos</button>' +
+      '<button class="btn btn-secondary btn-block" id="planilla-igss-btn" style="margin-bottom:8px;">Planilla de IGSS</button>' +
       '<button class="btn btn-secondary btn-block" id="reporte-anual-btn" style="margin-bottom:12px;">Reporte anual IGSS / ISR</button>' +
+      '<div class="section-title" style="margin-top:0;"><h2>Bono 14 y Aguinaldo</h2></div>' +
       '<div class="quick-actions" style="margin-bottom:12px;">' +
         '<button class="btn btn-secondary" id="pagar-bono14-btn">Pagar Bono 14</button>' +
         '<button class="btn btn-secondary" id="pagar-aguinaldo-btn">Pagar Aguinaldo</button>' +
@@ -2767,7 +2834,10 @@ function buildDbShim(fsDb){
 
     document.getElementById('pago-search').addEventListener('input', function(e){ state.filters.pagosQuery = e.target.value; renderNomina(); });
     el.querySelectorAll('.filter-chips .chip').forEach(function(c){ c.addEventListener('click', function(){ state.filters.pagosEstado = c.dataset.val; renderNomina(); }); });
+    document.getElementById('nom-pagar-sueldos').addEventListener('click', function(){ openPagarSueldos(); });
+    document.getElementById('nom-registrar-pago').addEventListener('click', openPagoForm);
     document.getElementById('exportar-nomina-btn').addEventListener('click', openExportarNomina);
+    document.getElementById('planilla-igss-btn').addEventListener('click', openPlanillaIGSS);
     document.getElementById('reporte-anual-btn').addEventListener('click', openReporteAnualFiscal);
     document.getElementById('pagar-bono14-btn').addEventListener('click', function(){ openPagarAnual('bono14'); });
     document.getElementById('pagar-aguinaldo-btn').addEventListener('click', function(){ openPagarAnual('aguinaldo'); });
@@ -2795,6 +2865,40 @@ function buildDbShim(fsDb){
     } else {
       wrap.innerHTML = '<div class="ledger">' + list.map(pagoRowHtml).join('') + '</div>';
       wireLedgerRows(wrap, list, openPagoDetail);
+    }
+  }
+
+  function renderNominaComisiones(el, subTabsHtml){
+    var q = (state.filters.comisionesQuery||'').toLowerCase();
+    var comisionesEmpresa = state.comisiones.filter(function(c){ return c.empresaId === state.empresaActualId; });
+    var list = comisionesEmpresa.filter(function(c){
+      return !q || (c.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
+    });
+    var ym = todayISO().slice(0,7);
+    var totalMes = comisionesEmpresa.filter(function(c){ return (c.fechaPago||'').slice(0,7) === ym; })
+      .reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
+
+    el.innerHTML =
+      '<div class="view-head"><h1>Nómina</h1><p>Comisiones — pagos aparte del salario</p></div>' +
+      subTabsHtml +
+      '<div class="banner">Las comisiones se suman al total de nómina de la empresa en el mes al que correspondan. No afectan el salario de cada empleado ni el cálculo de IGSS o ISR.</div>' +
+      '<div class="stat-row" style="grid-template-columns:1fr 1fr;">' +
+        '<div class="stat-tile"><div class="label">Comisiones (mes)</div><div class="value money">'+totalMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Registros (mes)</div><div class="value">'+comisionesEmpresa.filter(function(c){return (c.fechaPago||'').slice(0,7)===ym;}).length+'</div></div>' +
+      '</div>' +
+      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="com-search" placeholder="Buscar por empleado" value="'+esc(state.filters.comisionesQuery||'')+'"/></div>' +
+      '<button class="btn btn-primary btn-block" id="qa-nueva-comision" style="margin-bottom:14px;">+ Registrar comisión</button>' +
+      '<div id="comisiones-wrap"></div>';
+
+    document.getElementById('com-search').addEventListener('input', function(e){ state.filters.comisionesQuery = e.target.value; renderNomina(); });
+    document.getElementById('qa-nueva-comision').addEventListener('click', function(){ openComisionForm(null); });
+
+    var wrap = document.getElementById('comisiones-wrap');
+    if(list.length === 0){
+      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin comisiones registradas</div>Usa el botón de arriba para agregar una.</div>';
+    } else {
+      wrap.innerHTML = '<div class="ledger">' + list.map(comisionRowHtml).join('') + '</div>';
+      wireLedgerRows(wrap, list, openComisionDetail);
     }
   }
 
@@ -2939,8 +3043,10 @@ function buildDbShim(fsDb){
 
     var contenedor = document.createElement('div');
     contenedor.style.position = 'fixed';
-    contenedor.style.left = '-10000px';
+    contenedor.style.left = '0';
     contenedor.style.top = '0';
+    contenedor.style.zIndex = '999999';
+    contenedor.style.background = '#fff';
     contenedor.style.width = '11in';
     contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenidoHtml + '</div>';
     document.body.appendChild(contenedor);
@@ -2951,7 +3057,7 @@ function buildDbShim(fsDb){
       margin: 0,
       filename: ('Nomina '+empresaActual().nombre+' '+etiquetaPeriodo).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', x: 0, y: 0, scrollX: 0, scrollY: 0, windowWidth: elPagina.scrollWidth, windowHeight: elPagina.scrollHeight },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' },
       pagebreak: { mode: ['css', 'legacy'] }
     }).from(elPagina).save().then(function(){
@@ -3042,8 +3148,10 @@ function buildDbShim(fsDb){
       '</table>';
     var contenedor = document.createElement('div');
     contenedor.style.position = 'fixed';
-    contenedor.style.left = '-10000px';
+    contenedor.style.left = '0';
     contenedor.style.top = '0';
+    contenedor.style.zIndex = '999999';
+    contenedor.style.background = '#fff';
     contenedor.style.width = '11in';
     contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenidoHtml + '</div>';
     document.body.appendChild(contenedor);
@@ -3053,8 +3161,116 @@ function buildDbShim(fsDb){
       margin: 0,
       filename: ('Reporte anual IGSS-ISR '+empresaActual().nombre+' '+anio).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', x: 0, y: 0, scrollX: 0, scrollY: 0, windowWidth: elPagina.scrollWidth, windowHeight: elPagina.scrollHeight },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(elPagina).save().then(function(){
+      document.body.removeChild(contenedor);
+      toast('PDF descargado');
+    }).catch(function(){
+      document.body.removeChild(contenedor);
+      toast('No se pudo generar el PDF', true);
+    });
+  }
+
+  /* ---------- Planilla de IGSS (mensual, cuota laboral ya descontada) ---------- */
+  // Nota: el sistema solo calcula la cuota LABORAL (la que se le descuenta al empleado); no calcula
+  // la cuota patronal porque esa tasa no está configurada en la app. Esta planilla sirve como
+  // respaldo de lo retenido, no reemplaza el formulario oficial que exige IGSS con número patronal
+  // y de afiliación de cada trabajador.
+  function calcularPlanillaIGSSMes(mes){
+    var pagosMes = state.pagos.filter(function(p){
+      return p.empresaId === state.empresaActualId && p.estado === 'pagado' && (p.fechaPago||'').slice(0,7) === mes && (Number(p.igss)||0) > 0;
+    });
+    var porEmpleado = {};
+    pagosMes.forEach(function(p){
+      var key = p.empleadoId || p.empleadoNombre;
+      if(!porEmpleado[key]) porEmpleado[key] = { nombre: p.empleadoNombre, salarioSujeto:0, igss:0, pagos:0 };
+      porEmpleado[key].salarioSujeto += Number(p.salarioBruto)||0;
+      porEmpleado[key].igss += Number(p.igss)||0;
+      porEmpleado[key].pagos += 1;
+    });
+    return Object.keys(porEmpleado).map(function(k){
+      var d = porEmpleado[k];
+      d.salarioSujeto = round2(d.salarioSujeto); d.igss = round2(d.igss);
+      return d;
+    }).sort(function(a,b){ return a.nombre.localeCompare(b.nombre); });
+  }
+
+  function openPlanillaIGSS(){
+    var hoy = new Date();
+    var mesActual = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
+    var body =
+      '<div class="field"><label for="pig-mes">Mes</label><input id="pig-mes" type="month" value="'+mesActual+'"/></div>' +
+      '<p class="hint">Suma la cuota laboral de IGSS ya descontada a cada empleado en los pagos marcados como pagados ese mes. No incluye la cuota patronal (esa tasa no está configurada en el sistema) — verifica el formulario oficial con tu contador antes de presentarlo al IGSS.</p>' +
+      '<button class="btn btn-primary btn-block" id="pig-csv" style="margin-top:6px;">Descargar Excel (CSV)</button>' +
+      '<button class="btn btn-secondary btn-block" id="pig-pdf" style="margin-top:8px;">Descargar PDF</button>';
+    openSheet('Planilla de IGSS', body, function(root){
+      root.querySelector('#pig-csv').addEventListener('click', function(){
+        var mes = root.querySelector('#pig-mes').value;
+        if(!mes){ toast('Selecciona el mes', true); return; }
+        var datos = calcularPlanillaIGSSMes(mes);
+        if(datos.length === 0){ toast('No hay pagos con IGSS en ese mes', true); return; }
+        var headers = ['Empleado','Pagos en el mes','Salario sujeto a IGSS','Cuota laboral IGSS'];
+        var filas = datos.map(function(d){ return [d.nombre, d.pagos, d.salarioSujeto, d.igss]; });
+        var csv = '﻿' + [headers].concat(filas).map(function(f){ return f.map(csvCelda).join(','); }).join('\r\n');
+        descargarArchivo('Planilla IGSS '+esc(empresaActual().nombre)+' '+mes+'.csv', csv, 'text/csv;charset=utf-8;');
+        toast('Descargado'); closeSheet();
+      });
+      root.querySelector('#pig-pdf').addEventListener('click', function(){
+        var mes = root.querySelector('#pig-mes').value;
+        if(!mes){ toast('Selecciona el mes', true); return; }
+        var datos = calcularPlanillaIGSSMes(mes);
+        if(datos.length === 0){ toast('No hay pagos con IGSS en ese mes', true); return; }
+        generarPDFPlanillaIGSS(datos, mes);
+        closeSheet();
+      });
+    });
+  }
+
+  function generarPDFPlanillaIGSS(datos, mes){
+    if(!window.html2pdf){ toast('No se pudo cargar el generador de PDF, revisa tu conexión e intenta de nuevo', true); return; }
+    var totalSalario = round2(datos.reduce(function(s,d){ return s + d.salarioSujeto; }, 0));
+    var totalIgss = round2(datos.reduce(function(s,d){ return s + d.igss; }, 0));
+    var filasHtml = datos.map(function(d){
+      return '<tr><td>'+esc(d.nombre)+'</td><td class="num">'+d.pagos+'</td><td class="num">'+fmtQ(d.salarioSujeto)+'</td><td class="num">'+fmtQ(d.igss)+'</td></tr>';
+    }).join('');
+    var estilos =
+      '*{ box-sizing:border-box; }' +
+      '.pdf-page{ background:#fff; font-family:"IBM Plex Sans",Arial,sans-serif; color:#161616; width:8.5in; min-height:11in; padding:1.5cm; }' +
+      '.pdf-page h1{ font-size:1.2rem; margin:0 0 4px; }' +
+      '.pdf-page .sub{ color:#555; font-size:.85rem; margin-bottom:6px; }' +
+      '.pdf-page .nota{ color:#777; font-size:.72rem; margin-bottom:16px; }' +
+      '.pdf-page table{ width:100%; border-collapse:collapse; font-size:.82rem; }' +
+      '.pdf-page th{ text-align:left; border-bottom:2px solid #111; padding:6px 14px 6px 4px; }' +
+      '.pdf-page td{ padding:5px 14px 5px 4px; border-bottom:1px solid #ddd; }' +
+      '.pdf-page td.num, .pdf-page th.num{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:8px; }';
+    var contenidoHtml =
+      '<h1>Planilla de IGSS — '+esc(empresaActual().nombre||'')+'</h1>' +
+      '<div class="sub">Mes '+esc(mes)+' · '+datos.length+' empleado(s)</div>' +
+      '<div class="nota">Solo cuota laboral ya descontada. No incluye cuota patronal ni números de afiliación — verifica con tu contador antes de presentar.</div>' +
+      '<table><thead><tr><th>Empleado</th><th class="num">Pagos</th><th class="num">Salario sujeto</th><th class="num">Cuota laboral IGSS</th></tr></thead>' +
+      '<tbody>' + filasHtml + '</tbody>' +
+      '<tfoot><tr class="total"><td colspan="2">TOTAL</td><td class="num">'+fmtQ(totalSalario)+'</td><td class="num">'+fmtQ(totalIgss)+'</td></tr></tfoot>' +
+      '</table>';
+    var contenedor = document.createElement('div');
+    contenedor.style.position = 'fixed';
+    contenedor.style.left = '0';
+    contenedor.style.top = '0';
+    contenedor.style.zIndex = '999999';
+    contenedor.style.background = '#fff';
+    contenedor.style.width = '8.5in';
+    contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenidoHtml + '</div>';
+    document.body.appendChild(contenedor);
+    var elPagina = contenedor.querySelector('.pdf-page');
+    toast('Generando PDF…');
+    html2pdf().set({
+      margin: 0,
+      filename: ('Planilla IGSS '+empresaActual().nombre+' '+mes).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', x: 0, y: 0, scrollX: 0, scrollY: 0, windowWidth: elPagina.scrollWidth, windowHeight: elPagina.scrollHeight },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
     }).from(elPagina).save().then(function(){
       document.body.removeChild(contenedor);
@@ -3131,7 +3347,7 @@ function buildDbShim(fsDb){
         var loanSum = checkedLoans().reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
         root.querySelector('#p-breakdown').innerHTML =
           (diasInfo ? '<div class="banner" style="margin-bottom:10px;">Empleado nuevo: se le pagan '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de este periodo (ingresó el '+esc(emp.fechaIngreso)+').</div>' : '') +
           row('Salario base', b.salarioBase) + row('Bonificación incentivo', b.bonificacion) +
@@ -3161,7 +3377,7 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
         var data = Object.assign({
           empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
           periodoTipo: periodo, periodoEtiqueta: periodoEtiqueta(fecha, periodo),
@@ -3206,6 +3422,7 @@ function buildDbShim(fsDb){
       (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '') +
       '<div class="breakdown-row" style="padding:0 2px;margin-top:8px;"><span>Registrado por</span><span>'+esc(p.registradoPor||'—')+'</span></div>' +
       (p.estado === 'pendiente' ? '<button class="btn btn-primary btn-block" id="marcar-pagado" style="margin-top:16px;">Marcar como pagado</button>' : '') +
+      (p.estado !== 'pendiente' ? '<button class="btn btn-secondary btn-block" id="imprimir-recibo" style="margin-top:16px;">Imprimir recibo (PDF)</button>' : '') +
       '<button class="btn btn-danger btn-block" id="eliminar-pago" style="margin-top:8px;">Eliminar pago</button>' +
       '<p class="disclaimer">Elimina este registro si se ingresó por error. Pide tu contraseña y un motivo, y queda guardado en un registro de auditoría.</p>';
     openSheet(esc(p.empleadoNombre), body, function(root){
@@ -3214,6 +3431,8 @@ function buildDbShim(fsDb){
         try{ await state.db.collection('pagos').doc(p.id).update({estado:'pagado'}); toast('Marcado como pagado'); closeSheet(); }
         catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); }
       });
+      var imprimirBtn = root.querySelector('#imprimir-recibo');
+      if(imprimirBtn) imprimirBtn.addEventListener('click', function(){ generarPDFReciboPago(p); });
       root.querySelector('#eliminar-pago').addEventListener('click', function(){
         requireFreshAuth(function(){ openMotivoEliminarPago(p); });
       });
@@ -3254,41 +3473,94 @@ function buildDbShim(fsDb){
     });
   }
 
-  /* ============================ COMISIONES ============================ */
-  function renderComisiones(){
-    var el = document.getElementById('view-comisiones');
-    var q = (state.filters.comisionesQuery||'').toLowerCase();
-    var comisionesEmpresa = state.comisiones.filter(function(c){ return c.empresaId === state.empresaActualId; });
-    var list = comisionesEmpresa.filter(function(c){
-      return !q || (c.empleadoNombre||'').toLowerCase().indexOf(q) > -1;
-    });
-    var ym = todayISO().slice(0,7);
-    var totalMes = comisionesEmpresa.filter(function(c){ return (c.fechaPago||'').slice(0,7) === ym; })
-      .reduce(function(s,c){ return s + (Number(c.monto)||0); }, 0);
+  // Recibo de pago de salario, con los datos del empleado y del empleador (NIT, nombre legal,
+  // dirección registrada), y una declaración basada en el Código de Trabajo de Guatemala (Decreto
+  // 1441), el Decreto 37-2001 (Bonificación Incentivo) y, cuando aplica, el Decreto 10-2012 (ISR).
+  function generarPDFReciboPago(p){
+    if(!window.html2pdf){ toast('No se pudo cargar el generador de PDF, revisa tu conexión e intenta de nuevo', true); return; }
+    var emp = state.empleados.find(function(e){ return e.id === p.empleadoId; }) || {};
+    var em = empresaActual();
+    var lh = buildLetterheadHtml();
+    var fc = lineaFechaCiudad(p.fechaPago || todayISO());
 
-    el.innerHTML =
-      '<div class="view-head"><h1>Comisiones</h1><p>Pagos aparte del salario</p></div>' +
-      '<div class="banner">Las comisiones se suman al total de nómina de la empresa en el mes al que correspondan. No afectan el salario de cada empleado ni el cálculo de IGSS o ISR.</div>' +
-      '<div class="stat-row" style="grid-template-columns:1fr 1fr;">' +
-        '<div class="stat-tile"><div class="label">Comisiones (mes)</div><div class="value money">'+totalMes.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})+'</div></div>' +
-        '<div class="stat-tile"><div class="label">Registros (mes)</div><div class="value">'+comisionesEmpresa.filter(function(c){return (c.fechaPago||'').slice(0,7)===ym;}).length+'</div></div>' +
+    var filasTabla =
+      '<tr><td>Salario base</td><td>'+fmtQ(p.salarioBase)+'</td></tr>' +
+      '<tr><td>Bonificación incentivo (Decreto 37-2001)</td><td>'+fmtQ(p.bonificacion)+'</td></tr>' +
+      '<tr><td><strong>Salario bruto</strong></td><td><strong>'+fmtQ(p.salarioBruto)+'</strong></td></tr>' +
+      (p.igss ? '<tr><td>(-) IGSS</td><td>-'+fmtQ(p.igss)+'</td></tr>' : '') +
+      (p.isr ? '<tr><td>(-) ISR (Decreto 10-2012)</td><td>-'+fmtQ(p.isr)+'</td></tr>' : '') +
+      (p.otrasDeduccionesManual ? '<tr><td>(-) Deducción puntual'+(p.otrasDeduccionesNota?' ('+esc(p.otrasDeduccionesNota)+')':'')+'</td><td>-'+fmtQ(p.otrasDeduccionesManual)+'</td></tr>' : '') +
+      (p.prestamosAplicados||[]).map(function(pa){ return '<tr><td>(-) '+esc(pa.concepto)+'</td><td>-'+fmtQ(pa.monto)+'</td></tr>'; }).join('') +
+      '<tr class="total"><td>TOTAL LÍQUIDO PAGADO</td><td>'+fmtQ(p.totalNeto)+'</td></tr>';
+
+    var empleadorNombre = esc(em.nombreLegal || em.nombre || '');
+    var empleadorNit = em.nit ? ', con Número de Identificación Tributaria (NIT) '+esc(em.nit) : '';
+
+    var contenido = lh +
+      '<h3>RECIBO DE PAGO DE SALARIO</h3>' +
+      '<div class="doc-body">' +
+        '<p>'+fc+'</p>' +
+        '<p>Empleado: <strong>'+esc(p.empleadoNombre)+'</strong>'+(emp.dpi?' — DPI: '+esc(emp.dpi):'')+(emp.puesto?'<br>Puesto: '+esc(emp.puesto):'')+'</p>' +
+        '<table class="doc-table">'+filasTabla+'</table>' +
+        '<p class="legal">Yo, <strong>'+esc(p.empleadoNombre)+'</strong>'+(emp.dpi?', quien me identifico con Documento Personal de Identificación (DPI) número '+esc(emp.dpi):'')+', declaro haber recibido a mi entera satisfacción de parte de <strong>'+empleadorNombre+'</strong>'+empleadorNit+' la cantidad de <strong>'+fmtQ(p.totalNeto)+'</strong> ('+montoEnLetras(p.totalNeto)+'), correspondiente al pago de mi salario del período arriba indicado, de conformidad con lo establecido en el Código de Trabajo, Decreto número 1441 del Congreso de la República de Guatemala.</p>' +
+        '<p class="legal">El monto anterior incluye la Bonificación Incentivo de conformidad con el Decreto 37-2001 del Congreso de la República, y las deducciones de ley correspondientes al Instituto Guatemalteco de Seguridad Social (IGSS)'+(p.isr?' y al Impuesto Sobre la Renta (ISR), conforme a la Ley de Actualización Tributaria, Decreto 10-2012':'')+', cuando aplica.</p>' +
       '</div>' +
-      '<div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="com-search" placeholder="Buscar por empleado" value="'+esc(state.filters.comisionesQuery||'')+'"/></div>' +
-      '<button class="btn btn-primary btn-block" id="qa-nueva-comision" style="margin-bottom:14px;">+ Registrar comisión</button>' +
-      '<div id="comisiones-wrap"></div>';
+      '<div class="doc-signature">' +
+        '<div class="sig-block">'+(p.firma?'<img src="'+p.firma+'" style="max-width:200px;max-height:70px;display:block;margin:0 auto 4px;"/>':'')+'<div class="sig-line"></div>'+esc(p.empleadoNombre)+'<br>Recibí conforme</div>' +
+        '<div class="sig-block"><div class="sig-line"></div>Por '+esc(em.nombre||'')+'</div>' +
+      '</div>' +
+      buildFooterHtml();
 
-    document.getElementById('com-search').addEventListener('input', function(e){ state.filters.comisionesQuery = e.target.value; renderComisiones(); });
-    document.getElementById('qa-nueva-comision').addEventListener('click', function(){ openComisionForm(null); });
+    var estilos =
+      '*{ box-sizing:border-box; }' +
+      '.pdf-page{ background:#fff; font-family:Georgia,"Times New Roman",serif; color:#161616; width:8.5in; min-height:11in; padding:2.5cm; }' +
+      '.pdf-page .letterhead{ display:flex; align-items:center; gap:18px; padding-bottom:16px; margin-bottom:8px; border-bottom:3px solid #1450D8; }' +
+      '.pdf-page .letterhead img{ width:70px; height:70px; object-fit:contain; flex-shrink:0; }' +
+      '.pdf-page .letterhead .lh-name{ font-weight:700; font-size:1.35rem; letter-spacing:.01em; }' +
+      '.pdf-page .letterhead .lh-detail{ font-size:.85rem; color:#555; margin-top:4px; line-height:1.4; }' +
+      '.pdf-page .letterhead-rule{ height:1px; background:#111; opacity:.15; margin-bottom:26px; }' +
+      '.pdf-page h3{ text-align:center; letter-spacing:.06em; margin:0 0 22px; font-size:1.05rem; }' +
+      '.pdf-page p{ margin:0 0 14px; line-height:1.4; text-align:justify; font-size:.98rem; }' +
+      '.pdf-page p.legal{ font-size:.68rem; line-height:1.35; color:#444; }' +
+      '.pdf-page strong{ font-weight:700; }' +
+      '.pdf-page .doc-signature{ margin-top:1cm; display:flex; gap:32px; flex-wrap:wrap; page-break-inside:avoid; }' +
+      '.pdf-page .sig-block{ flex:1; min-width:170px; text-align:center; font-size:.92rem; line-height:1.4; page-break-inside:avoid; }' +
+      '.pdf-page .sig-line{ border-top:1px solid #111; margin-bottom:8px; padding-top:8px; }' +
+      '.pdf-page .doc-table{ width:100%; border-collapse:collapse; margin:16px 0; font-size:.94rem; }' +
+      '.pdf-page .doc-table td{ padding:7px 4px; border-bottom:1px solid #ccc; }' +
+      '.pdf-page .doc-table td:last-child{ text-align:right; font-family:"Courier New",monospace; }' +
+      '.pdf-page .doc-table tr.total td{ font-weight:700; border-top:2px solid #111; border-bottom:none; padding-top:9px; }' +
+      '.pdf-page .doc-footer{ margin-top:20px; padding-top:10px; border-top:1px solid #bbb; text-align:center; font-size:.78rem; color:#555; letter-spacing:.01em; }';
 
-    var wrap = document.getElementById('comisiones-wrap');
-    if(list.length === 0){
-      wrap.innerHTML = '<div class="empty-state"><div class="display">Sin comisiones registradas</div>Usa el botón de arriba para agregar una.</div>';
-    } else {
-      wrap.innerHTML = '<div class="ledger">' + list.map(comisionRowHtml).join('') + '</div>';
-      wireLedgerRows(wrap, list, openComisionDetail);
-    }
+    var contenedor = document.createElement('div');
+    contenedor.style.position = 'fixed';
+    contenedor.style.left = '0';
+    contenedor.style.top = '0';
+    contenedor.style.zIndex = '999999';
+    contenedor.style.background = '#fff';
+    contenedor.style.width = '8.5in';
+    contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + contenido + '</div>';
+    document.body.appendChild(contenedor);
+    var elPagina = contenedor.querySelector('.pdf-page');
+
+    toast('Generando PDF…');
+    html2pdf().set({
+      margin: 0,
+      filename: ('Recibo de pago '+p.empleadoNombre+' '+p.fechaPago).replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', x: 0, y: 0, scrollX: 0, scrollY: 0, windowWidth: elPagina.scrollWidth, windowHeight: elPagina.scrollHeight },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(elPagina).save().then(function(){
+      document.body.removeChild(contenedor);
+      toast('PDF descargado, listo para firmar');
+    }).catch(function(){
+      document.body.removeChild(contenedor);
+      toast('No se pudo generar el PDF', true);
+    });
   }
 
+  /* ============================ COMISIONES (sub-pestaña dentro de Nómina) ============================ */
   function formatearMesComision(mesISO){
     if(!mesISO || mesISO.length < 7) return mesISO || '';
     var partes = mesISO.split('-');
@@ -3378,7 +3650,7 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, ctx.fecha, ctx.periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo);
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
         return { etiqueta: etiqueta, pagoExistente: pagoExistente, cobertura: cobertura, loanApplied: loanApplied, igssOn: igssOn, isrOn: isrOn, b: b, diasInfo: diasInfo };
       }
 
@@ -3607,10 +3879,12 @@ function buildDbShim(fsDb){
 
   function buildLetterheadHtml(){
     var em = empresaActual();
-    var detalle = [em.direccion, em.telefono ? 'Tel: '+em.telefono : ''].filter(Boolean).join(' · ');
+    var nombreLegalLinea = (em.nombreLegal && em.nombreLegal !== em.nombre) ? em.nombreLegal : '';
+    var detalle = [em.nit ? 'NIT: '+em.nit : '', em.direccion, em.telefono ? 'Tel: '+em.telefono : ''].filter(Boolean).join(' · ');
     return '<div class="letterhead">' +
       (em.logoDataUrl ? '<img src="'+em.logoDataUrl+'" alt="Logo"/>' : '') +
       '<div class="lh-text"><div class="lh-name">'+esc(em.nombre||'')+'</div>' +
+      (nombreLegalLinea ? '<div class="lh-detail">'+esc(nombreLegalLinea)+'</div>' : '') +
       (detalle ? '<div class="lh-detail">'+esc(detalle)+'</div>' : '') +
       '</div></div>' +
       '<div class="letterhead-rule"></div>';
@@ -3918,8 +4192,10 @@ function buildDbShim(fsDb){
 
     var contenedor = document.createElement('div');
     contenedor.style.position = 'fixed';
-    contenedor.style.left = '-10000px';
+    contenedor.style.left = '0';
     contenedor.style.top = '0';
+    contenedor.style.zIndex = '999999';
+    contenedor.style.background = '#fff';
     contenedor.style.width = '8.5in';
     contenedor.innerHTML = '<style>'+estilos+'</style><div class="pdf-page">' + d.contenidoHtml + '</div>';
     document.body.appendChild(contenedor);
@@ -3930,7 +4206,7 @@ function buildDbShim(fsDb){
       margin: 0,
       filename: titulo.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', x: 0, y: 0, scrollX: 0, scrollY: 0, windowWidth: elPagina.scrollWidth, windowHeight: elPagina.scrollHeight },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
     }).from(elPagina).save().then(function(){
@@ -4030,6 +4306,9 @@ function buildDbShim(fsDb){
     var esPrimera = empresasAccesibles().length === 0;
     var body =
       '<div class="field"><label for="em-nombre">Nombre de la empresa</label><input id="em-nombre" placeholder="Ej. Importadora Viflo"/></div>' +
+      '<div class="field"><label for="em-nombrelegal">Nombre de la S.A. o nombre del propietario</label><input id="em-nombrelegal" placeholder="Ej. Importadora Viflo, Sociedad Anónima"/><p class="hint">Escribe el nombre exactamente como está inscrito ante la SAT según tu patente de comercio.</p></div>' +
+      '<div class="field"><label for="em-nit">NIT de la empresa</label><input id="em-nit" placeholder="Ej. 12345678-9"/></div>' +
+      '<div class="field"><label for="em-direccionlegal">Dirección registrada (según patente de comercio)</label><textarea id="em-direccionlegal" placeholder="Dirección exacta de la patente"></textarea></div>' +
       (esPrimera ? '<p class="disclaimer">Incluye '+mesesPruebaConfigurados()+' mes'+(mesesPruebaConfigurados()===1?'':'es')+' de prueba gratuita automática.</p>' :
         '<div class="field"><label for="em-codigo">Código de autorización</label><input id="em-codigo" placeholder="Ej. AB12CD34" style="text-transform:uppercase;"/></div>' +
         '<p class="disclaimer">Cada cuenta incluye una sola empresa. Para crear una empresa adicional necesitas un código de autorización del proveedor del sistema.'+htmlContactoSoporte()+'</p>'
@@ -4038,7 +4317,13 @@ function buildDbShim(fsDb){
     openSheet('Nueva empresa', body, function(root){
       root.querySelector('#em-submit').addEventListener('click', async function(){
         var nombre = root.querySelector('#em-nombre').value.trim();
+        var nombreLegal = root.querySelector('#em-nombrelegal').value.trim();
+        var nit = root.querySelector('#em-nit').value.trim();
+        var direccionLegal = root.querySelector('#em-direccionlegal').value.trim();
         if(!nombre){ toast('Escribe el nombre de la empresa', true); return; }
+        if(!nombreLegal){ toast('Escribe el nombre legal (S.A. o propietario) según tu patente', true); return; }
+        if(!nit){ toast('Escribe el NIT de la empresa', true); return; }
+        if(!direccionLegal){ toast('Escribe la dirección registrada según tu patente', true); return; }
         var codigo = '';
         var codSnap = null;
         if(!esPrimera){
@@ -4051,7 +4336,10 @@ function buildDbShim(fsDb){
             if(!codSnap.exists){ toast('Código inválido', true); return; }
             if(codSnap.data().usado){ toast('Este código ya fue usado', true); return; }
           }
-          var ref = await state.db.collection('empresas').add({ nombre: nombre, creadaPor: state.session.nombre, creadaEn: new Date().toISOString() });
+          var ref = await state.db.collection('empresas').add({
+            nombre: nombre, nombreLegal: nombreLegal, nit: nit, direccion: direccionLegal,
+            creadaPor: state.session.nombre, creadaEn: new Date().toISOString()
+          });
           var miembro = state.equipo.find(function(m){ return m.id === state.session.id; });
           var acc = (miembro && miembro.empresasAcceso) || [];
           await state.db.collection('equipo').doc(state.session.id).update({ empresasAcceso: acc.concat([ref.id]) });
@@ -4070,7 +4358,10 @@ function buildDbShim(fsDb){
     var miembros = state.equipo.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
     var body =
       '<div class="field"><label for="ed-nombre">Nombre</label><input id="ed-nombre" value="'+esc(empresa.nombre)+'"/></div>' +
-      '<div class="divider-label" style="margin-top:0;">Datos para cartas y documentos oficiales</div>' +
+      '<div class="divider-label" style="margin-top:0;">Datos legales (según patente de comercio)</div>' +
+      '<div class="field"><label for="ed-nombrelegal">Nombre de la S.A. o nombre del propietario</label><input id="ed-nombrelegal" value="'+esc(empresa.nombreLegal||'')+'" placeholder="Ej. Importadora Viflo, Sociedad Anónima"/><p class="hint">Como está inscrito ante la SAT según la patente de comercio.</p></div>' +
+      '<div class="field"><label for="ed-nit">NIT de la empresa</label><input id="ed-nit" value="'+esc(empresa.nit||'')+'" placeholder="Ej. 12345678-9"/></div>' +
+      '<div class="divider-label">Datos para cartas y documentos oficiales</div>' +
       '<div class="field">' +
         '<label>Logo</label>' +
         '<div style="display:flex;align-items:center;gap:12px;">' +
@@ -4080,7 +4371,7 @@ function buildDbShim(fsDb){
         '<p class="hint">Aparecerá en el encabezado de las cartas y constancias.</p>' +
       '</div>' +
       '<div class="field"><label for="ed-ciudad">Ciudad (para la fecha de las cartas)</label><input id="ed-ciudad" value="'+esc(empresa.ciudad||'')+'" placeholder="Ej. Santa Elena, Petén"/></div>' +
-      '<div class="field"><label for="ed-direccion">Dirección</label><textarea id="ed-direccion" placeholder="Dirección de la empresa">'+esc(empresa.direccion||'')+'</textarea></div>' +
+      '<div class="field"><label for="ed-direccion">Dirección registrada (según patente de comercio)</label><textarea id="ed-direccion" placeholder="Dirección exacta de la patente">'+esc(empresa.direccion||'')+'</textarea></div>' +
       '<div class="field"><label for="ed-telefono">Teléfono</label><input id="ed-telefono" value="'+esc(empresa.telefono||'')+'" placeholder="Ej. 7952-0000"/></div>' +
       '<div class="divider-label">Usuarios con acceso</div>' +
       (miembros.length === 0 ? '<div class="empty-state">Sin usuarios en el equipo todavía</div>' :
@@ -4133,6 +4424,8 @@ function buildDbShim(fsDb){
         try{
           var datosEmpresa = {
             nombre: nombre,
+            nombreLegal: root.querySelector('#ed-nombrelegal').value.trim(),
+            nit: root.querySelector('#ed-nit').value.trim(),
             ciudad: root.querySelector('#ed-ciudad').value.trim(),
             direccion: root.querySelector('#ed-direccion').value.trim(),
             telefono: root.querySelector('#ed-telefono').value.trim()
@@ -4163,6 +4456,8 @@ function buildDbShim(fsDb){
     var empresas = state.todasEmpresasAdmin.slice().sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
     var licPorId = {};
     state.todasLicenciasAdmin.forEach(function(l){ licPorId[l.id] = l; });
+    var actividadPorId = {};
+    state.actividadEmpresasAdmin.forEach(function(a){ actividadPorId[a.id] = a; });
     var hoy = todayISO();
     var codigosPendientes = state.codigosEmpresaAdmin.filter(function(c){ return !c.usado; });
 
@@ -4216,9 +4511,10 @@ function buildDbShim(fsDb){
         var proximaAVencer = !!(lic && lic.fechaVencimiento && !vencida && diasHasta(lic.fechaVencimiento) <= 5);
         var estado = !lic ? 'Sin licencia' : (activa ? (vencida ? 'Activa (vencida)' : 'Activa') : 'Inactiva');
         if(lic && lic.esPrueba) estado = 'Prueba · ' + estado;
+        var actividad = actividadPorId[em.id];
         return '<button class="ledger-row" data-id="'+em.id+'">' +
           '<span class="status-bar'+(vencida||proximaAVencer?' warning':(activa?' good':''))+'"></span>' +
-          '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+'</span></span>' +
+          '<span class="row-main"><span class="title">'+esc(em.nombre)+'</span><span class="sub">'+estado+(lic&&lic.fechaVencimiento? ' · vence '+esc(lic.fechaVencimiento):'')+(lic&&lic.precioVenta? ' · '+fmtQ(lic.precioVenta):'')+' · '+esc(formatearUltimaActividad(actividad&&actividad.ultimaActividad))+'</span></span>' +
           '<span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>' +
         '</button>';
       }).join('');
@@ -4301,9 +4597,26 @@ function buildDbShim(fsDb){
     });
   }
 
+  function formatearUltimaActividad(iso){
+    if(!iso) return 'Nunca';
+    var fecha = iso.slice(0,10);
+    var d = diasHasta(fecha);
+    if(d === 0) return 'Hoy';
+    if(d === -1) return 'Ayer';
+    if(d < 0) return 'Hace '+Math.abs(d)+' días';
+    return fecha;
+  }
   function openLicenciaDetalle(empresa, lic){
     var vencidaYa = pruebaVencida(lic);
+    var actividad = state.actividadEmpresasAdmin.find(function(a){ return a.id === empresa.id; });
+    var diasActivos30 = (actividad && Array.isArray(actividad.diasActivos))
+      ? actividad.diasActivos.filter(function(d){ var dh = diasHasta(d); return dh != null && dh >= -30 && dh <= 0; }).length
+      : 0;
     var body =
+      '<div class="stat-row" style="grid-template-columns:1fr 1fr;margin-bottom:14px;">' +
+        '<div class="stat-tile"><div class="label">Última actividad</div><div class="value" style="font-size:1rem;">'+esc(formatearUltimaActividad(actividad&&actividad.ultimaActividad))+'</div></div>' +
+        '<div class="stat-tile"><div class="label">Días activos (30d)</div><div class="value">'+diasActivos30+'</div></div>' +
+      '</div>' +
       (lic && lic.esPrueba ? '<div class="banner"'+(vencidaYa?' style="background:#FDECEC;color:#B3261E;"':'')+'>'+(vencidaYa?'⚠️ Prueba gratuita vencida el '+esc(lic.fechaVencimiento):'En prueba gratuita, vence sola el '+esc(lic.fechaVencimiento))+'</div>' : '') +
       '<div class="field"><label>Tipo de plan</label><div class="radio-group">' +
         '<label class="radio-chip"><input type="radio" name="lic-tipo" value="prueba" '+(lic&&lic.esPrueba?'checked':'')+'/><span>Prueba gratuita (vence sola)</span></label>' +
@@ -4453,11 +4766,13 @@ function buildDbShim(fsDb){
     var btn = e.target.closest('button[data-tab]');
     if(!btn || btn.hidden) return;
     state.tab = btn.dataset.tab;
+    if(state.tab === 'licencias' && esSuperadmin()) cargarActividadEmpresas();
     render();
   });
   document.getElementById('fab-btn').addEventListener('click', function(){
-    if(state.tab === 'comisiones') openComisionForm(null);
-    else if(state.tab === 'documentos') openDocumentoTipoPicker(null);
+    if(state.tab === 'documentos') openDocumentoTipoPicker(null);
+    else if(state.tab === 'empleados') openEmpleadoForm(null);
+    else if(state.tab === 'nomina' && state.nominaSubTab === 'comisiones') openComisionForm(null);
     else openPagoForm();
   });
   document.getElementById('fab-ayuda-btn').addEventListener('click', openCentroAyuda);
