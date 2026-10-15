@@ -448,7 +448,7 @@ function buildDbShim(fsDb){
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
   // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
-  var APP_VERSION = '1.4';
+  var APP_VERSION = '1.5';
   var versionAutoRegistrada = false;
   // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
   // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
@@ -738,7 +738,7 @@ function buildDbShim(fsDb){
     var isrAnual = rentaImponible <= p.tope1 ? rentaImponible * p.tasa1 : (p.tope1 * p.tasa1) + (rentaImponible - p.tope1) * p.tasa2;
     return round2(isrAnual / 12);
   }
-  function calcularDesglose(salarioBaseMensual, bonificacionMensual, periodoTipo, otrasDeducciones, igssActivo, isrActivo, fraccionQuincena1, diasInfo, bonoPeriodoModo){
+  function calcularDesglose(salarioBaseMensual, bonificacionMensual, periodoTipo, otrasDeducciones, igssActivo, isrActivo, fraccionQuincena1, diasInfo, bonoPeriodoModo, igssPeriodoModo, igssMontoManual){
     salarioBaseMensual = Number(salarioBaseMensual)||0;
     bonificacionMensual = Number(bonificacionMensual)||0;
     otrasDeducciones = Number(otrasDeducciones)||0;
@@ -758,11 +758,17 @@ function buildDbShim(fsDb){
     else if(bonoPeriodoModo === 'quincena2') bonoFraccionBase = (periodoTipo === 'quincena2') ? 1 : 0;
     else bonoFraccionBase = 0.5;
     var bonoFraccion = bonoFraccionBase * ratio;
-    var igssMensual = igssActivo ? calcularIGSSMensual(salarioBaseMensual) : 0;
+    var igssFraccionBase;
+    if(periodoTipo === 'mensual') igssFraccionBase = 1;
+    else if(igssPeriodoModo === 'quincena1') igssFraccionBase = (periodoTipo === 'quincena1') ? 1 : 0;
+    else if(igssPeriodoModo === 'quincena2') igssFraccionBase = (periodoTipo === 'quincena2') ? 1 : 0;
+    else igssFraccionBase = 0.5;
+    var igssFraccion = igssFraccionBase * ratio;
+    var igssMensual = igssActivo ? (igssMontoManual != null && !isNaN(igssMontoManual) ? Number(igssMontoManual) : calcularIGSSMensual(salarioBaseMensual)) : 0;
     var isrMensual = isrActivo ? calcularISRMensual(salarioBaseMensual, igssMensual) : 0;
     var salarioBase = round2(salarioBaseMensual * salarioFraccion);
     var bonificacion = round2(bonificacionMensual * bonoFraccion);
-    var igss = round2(igssMensual * salarioFraccion);
+    var igss = round2(igssMensual * igssFraccion);
     var isr = round2(isrMensual * salarioFraccion);
     var salarioBruto = round2(salarioBase + bonificacion);
     var totalDeducciones = round2(igss + isr + otrasDeducciones);
@@ -913,6 +919,102 @@ function buildDbShim(fsDb){
   // 'dividida' (por defecto, mitad y mitad), 'quincena1' o 'quincena2' (el 100% en una sola quincena).
   function empBonoPeriodo(emp){
     return (emp && emp.bonoPeriodo) || 'dividida';
+  }
+  // Igual que empBonoPeriodo, pero para el IGSS: en qué quincena se debita (o dividido en ambas).
+  function empIgssPeriodo(emp){
+    return (emp && emp.igssPeriodo) || 'dividida';
+  }
+
+  // ---------- Comprobante de pago: firma dibujada o foto de boleta de depósito (una de las dos,
+  // obligatoria) — reutilizable en cualquier pantalla donde se confirme un pago. ----------
+  function htmlComprobantePago(prefix){
+    return (
+      '<div class="divider-label">Comprobante de pago</div>' +
+      '<div class="field"><label>¿Cómo se confirma este pago?</label><div class="radio-group">' +
+        '<label class="radio-chip"><input type="radio" name="'+prefix+'-modo" value="firma"/><span>Firma</span></label>' +
+        '<label class="radio-chip"><input type="radio" name="'+prefix+'-modo" value="boleta"/><span>Boleta de depósito</span></label>' +
+      '</div></div>' +
+      '<div id="'+prefix+'-firma-wrap" hidden>' +
+        '<div class="signature-box"><canvas id="'+prefix+'-canvas"></canvas></div>' +
+        '<div class="quick-actions" style="margin-top:10px;"><button class="btn btn-secondary btn-block" id="'+prefix+'-borrar" type="button">Borrar firma</button></div>' +
+        '<p class="hint">Pide al empleado que firme aquí para confirmar que recibió su pago.</p>' +
+      '</div>' +
+      '<div id="'+prefix+'-boleta-wrap" hidden>' +
+        '<div class="field"><label for="'+prefix+'-boleta-texto">Número de boleta de depósito</label><input id="'+prefix+'-boleta-texto" placeholder="Ej. BI-00123456"/></div>' +
+      '</div>'
+    );
+  }
+  // root: elemento donde ya está insertado el html de arriba. onReady(bool): se llama cada vez que
+  // cambia si ya hay firma o boleta lista. Ningún modo queda elegido por defecto — quien registra
+  // el pago debe elegir uno. Devuelve { getData(), isReady(), cleanup() }.
+  function wireComprobantePago(root, prefix, onReady){
+    var modo = null;
+    var firmaWrap = root.querySelector('#'+prefix+'-firma-wrap');
+    var boletaWrap = root.querySelector('#'+prefix+'-boleta-wrap');
+    var canvas = root.querySelector('#'+prefix+'-canvas');
+    var c2d = canvas.getContext('2d');
+    var hasDrawn = false, drawing = false, lastX = 0, lastY = 0;
+    var canvasSized = false;
+    var boletaInput = root.querySelector('#'+prefix+'-boleta-texto');
+
+    function sizeCanvas(){
+      var rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(280, Math.round(rect.width));
+      canvas.height = 170;
+      c2d.lineWidth = 2.4; c2d.lineCap = 'round'; c2d.lineJoin = 'round'; c2d.strokeStyle = '#000000';
+    }
+
+    function isReady(){
+      if(modo === 'firma') return hasDrawn;
+      if(modo === 'boleta') return boletaInput.value.trim().length > 0;
+      return false;
+    }
+
+    function pos(e){ var rect = canvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
+    function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
+    function move(e){
+      if(!drawing) return;
+      e.preventDefault();
+      var p = pos(e);
+      c2d.beginPath(); c2d.moveTo(lastX, lastY); c2d.lineTo(p.x, p.y); c2d.stroke();
+      lastX = p.x; lastY = p.y;
+      if(!hasDrawn){ hasDrawn = true; onReady(isReady()); }
+    }
+    function stop(){ drawing = false; }
+    canvas.addEventListener('pointerdown', start);
+    canvas.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+
+    root.querySelector('#'+prefix+'-borrar').addEventListener('click', function(){
+      c2d.clearRect(0, 0, canvas.width, canvas.height);
+      hasDrawn = false; onReady(isReady());
+    });
+
+    root.querySelectorAll('input[name="'+prefix+'-modo"]').forEach(function(r){
+      r.addEventListener('change', function(){
+        modo = r.value;
+        firmaWrap.hidden = modo !== 'firma';
+        boletaWrap.hidden = modo !== 'boleta';
+        if(modo === 'firma' && !canvasSized){ canvasSized = true; sizeCanvas(); }
+        onReady(isReady());
+      });
+    });
+
+    boletaInput.addEventListener('input', function(){ onReady(isReady()); });
+
+    return {
+      getData: function(){
+        if(modo === 'firma') return hasDrawn ? { tipo: 'firma', dataUrl: canvas.toDataURL('image/png') } : null;
+        if(modo === 'boleta'){ var v = boletaInput.value.trim(); return v ? { tipo: 'boleta', texto: v } : null; }
+        return null;
+      },
+      isReady: isReady,
+      cleanup: function(){
+        canvas.removeEventListener('pointerdown', start);
+        canvas.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', stop);
+      }
+    };
   }
   // Monto que corresponde descontar de un préstamo/descuento en un periodo dado ('quincena1'|'quincena2'|'mensual').
   // 'ambas' permite montos distintos por quincena; 'quincenal' y 'mensual' son valores de datos previos (mismo monto siempre).
@@ -2036,6 +2138,14 @@ function buildDbShim(fsDb){
         '<div class="switch-text"><div class="t1">IGSS ('+fmtPct(getIgssRate())+')</div><div class="t2" id="f-igss-hint">'+(igssOn?'Activado: se descuenta en cada pago.':'Desactivado: no se descuenta.')+'</div></div>' +
         '<label class="switch"><input type="checkbox" id="f-igss-toggle" '+(igssOn?'checked':'')+'/><span class="switch-track"></span></label>' +
       '</div>' +
+      '<div id="f-igss-extra" '+(igssOn?'':'hidden')+'>' +
+        '<div class="field"><label>¿En qué quincena se debita el IGSS?</label><div class="radio-group">' +
+          '<label class="radio-chip"><input type="radio" name="f-igssperiodo" value="dividida" '+(empIgssPeriodo(existing||{})==='dividida'?'checked':'')+'/><span>Dividida (mitad y mitad)</span></label>' +
+          '<label class="radio-chip"><input type="radio" name="f-igssperiodo" value="quincena1" '+(empIgssPeriodo(existing||{})==='quincena1'?'checked':'')+'/><span>Completa en la 1ª</span></label>' +
+          '<label class="radio-chip"><input type="radio" name="f-igssperiodo" value="quincena2" '+(empIgssPeriodo(existing||{})==='quincena2'?'checked':'')+'/><span>Completa en la 2ª</span></label>' +
+        '</div><p class="hint">Solo aplica cuando se paga por quincena; en pago mensual siempre va completo.</p></div>' +
+        '<div class="field"><label for="f-igss-monto">Monto de IGSS a descontar (Q/mes)</label><input id="f-igss-monto" type="number" min="0" step="0.01" value="'+(existing&&existing.igssMontoManual!=null?existing.igssMontoManual:calcularIGSSMensual(existing?existing.salarioBase:0))+'"/><p class="hint">Calculado según ley ('+fmtPct(getIgssRate())+' del salario); puedes cambiarlo si es diferente.</p></div>' +
+      '</div>' +
       '<div class="field switch-card">' +
         '<div class="switch-text"><div class="t1">ISR</div><div class="t2" id="f-isr-hint">'+(isrOn?'Activado: se descuenta en cada pago.':'Desactivado: no se descuenta.')+'</div></div>' +
         '<label class="switch"><input type="checkbox" id="f-isr-toggle" '+(isrOn?'checked':'')+'/><span class="switch-track"></span></label>' +
@@ -2074,6 +2184,7 @@ function buildDbShim(fsDb){
     openSheet(isEdit?'Editar empleado':'Nuevo empleado', body, function(root){
       root.querySelector('#f-igss-toggle').addEventListener('change', function(e){
         root.querySelector('#f-igss-hint').textContent = e.target.checked ? 'Activado: se descuenta en cada pago.' : 'Desactivado: no se descuenta.';
+        root.querySelector('#f-igss-extra').hidden = !e.target.checked;
       });
       root.querySelector('#f-isr-toggle').addEventListener('change', function(e){
         root.querySelector('#f-isr-hint').textContent = e.target.checked ? 'Activado: se descuenta en cada pago.' : 'Desactivado: no se descuenta.';
@@ -2112,6 +2223,8 @@ function buildDbShim(fsDb){
           cuentaBancaria: root.querySelector('#f-cuenta').value.trim(),
           fechaIngreso: root.querySelector('#f-ingreso').value,
           igssActivo: root.querySelector('#f-igss-toggle').checked,
+          igssPeriodo: root.querySelector('input[name=f-igssperiodo]:checked').value,
+          igssMontoManual: round2(root.querySelector('#f-igss-monto').value),
           isrActivo: root.querySelector('#f-isr-toggle').checked
         };
         if(!data.nombre){ toast('El nombre es obligatorio', true); return; }
@@ -2274,7 +2387,7 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajadosConSalida(emp.fechaIngreso, fechaDespido, periodoTipo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodoTipo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp), empIgssPeriodo(emp), emp.igssMontoManual);
         var fechaLimite = sumarDiasAFecha(fechaDespido, DIAS_PLAZO_PAGO_DESPIDO);
 
         resultadoEl.innerHTML =
@@ -2314,12 +2427,22 @@ function buildDbShim(fsDb){
         '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(pago.totalNeto)+'</span></div>' +
       '</div>' +
       '<div class="field"><label for="pd-fecha">Fecha en que se paga</label><input id="pd-fecha" type="date" value="'+todayISO()+'"/></div>' +
-      '<button class="btn btn-primary btn-block" id="pd-confirmar" style="margin-top:10px;">Marcar como pagado</button>';
+      htmlComprobantePago('pd') +
+      '<button class="btn btn-primary btn-block" id="pd-confirmar" style="margin-top:10px;" disabled>Marcar como pagado</button>';
     openSheet('Liquidar pago pendiente', body, function(root){
-      root.querySelector('#pd-confirmar').addEventListener('click', async function(){
+      var confirmBtn = root.querySelector('#pd-confirmar');
+      var comprobante = wireComprobantePago(root, 'pd', function(ready){ confirmBtn.disabled = !ready; });
+      activeSheetCleanup = comprobante.cleanup;
+      confirmBtn.addEventListener('click', async function(){
+        var comp = comprobante.getData();
+        if(!comp) return;
         var fechaPago = root.querySelector('#pd-fecha').value || todayISO();
         try{
-          await state.db.collection('pagos').doc(pago.id).update({ estado: 'pagado', fechaPago: fechaPago });
+          await state.db.collection('pagos').doc(pago.id).update({
+            estado: 'pagado', fechaPago: fechaPago,
+            comprobanteTipo: comp.tipo, comprobanteEn: new Date().toISOString(),
+            firma: comp.tipo === 'firma' ? comp.dataUrl : null, boletaDeposito: comp.tipo === 'boleta' ? comp.texto : null
+          });
           toast('Pago registrado'); closeSheet();
         }catch(e){ toast('No se pudo registrar el pago: '+(e.code||''), true); }
       });
@@ -2446,57 +2569,20 @@ function buildDbShim(fsDb){
             (info.parte ? ' Esta es la primera mitad (50%); la segunda queda pendiente con plazo al '+esc(ctx.fechaLimite2)+'.' : '') +
           '</div>' +
           '<div class="breakdown"><div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(info.montoAPagar)+'</span></div></div>' +
-          '<div class="divider-label">Firma de recibido</div>' +
-          '<div class="signature-box"><canvas id="firma-canvas"></canvas></div>' +
-          '<div class="quick-actions" style="margin-top:10px;"><button class="btn btn-secondary btn-block" id="firma-borrar">Borrar firma</button></div>' +
-          '<p class="hint">Pide al empleado que firme aquí para confirmar que recibió su pago.</p>' +
+          htmlComprobantePago('pa') +
           '<button class="btn btn-primary btn-block" id="firma-confirmar" style="margin-top:14px;" disabled>Confirmar pago</button>';
 
-        var canvas = content.querySelector('#firma-canvas');
-        var c2d = canvas.getContext('2d');
         var confirmBtn = content.querySelector('#firma-confirmar');
-        var hasDrawn = false, drawing = false, lastX = 0, lastY = 0;
-
-        function sizeCanvas(){
-          var rect = canvas.getBoundingClientRect();
-          canvas.width = Math.max(280, Math.round(rect.width));
-          canvas.height = 170;
-          c2d.lineWidth = 2.4; c2d.lineCap = 'round'; c2d.lineJoin = 'round'; c2d.strokeStyle = '#000000';
-        }
-        sizeCanvas();
-
-        function pos(e){ var rect = canvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
-        function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
-        function move(e){
-          if(!drawing) return;
-          e.preventDefault();
-          var p = pos(e);
-          c2d.beginPath(); c2d.moveTo(lastX, lastY); c2d.lineTo(p.x, p.y); c2d.stroke();
-          lastX = p.x; lastY = p.y;
-          if(!hasDrawn){ hasDrawn = true; confirmBtn.disabled = false; }
-        }
-        function stop(){ drawing = false; }
-        canvas.addEventListener('pointerdown', start);
-        canvas.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', stop);
-
-        ctx.cleanupSig = function(){
-          canvas.removeEventListener('pointerdown', start);
-          canvas.removeEventListener('pointermove', move);
-          window.removeEventListener('pointerup', stop);
-        };
+        var comprobante = wireComprobantePago(content, 'pa', function(ready){ confirmBtn.disabled = !ready; });
+        ctx.cleanupSig = comprobante.cleanup;
         activeSheetCleanup = ctx.cleanupSig;
 
-        content.querySelector('#firma-borrar').addEventListener('click', function(){
-          c2d.clearRect(0, 0, canvas.width, canvas.height);
-          hasDrawn = false; confirmBtn.disabled = true;
-        });
         content.querySelector('#sig-volver').addEventListener('click', function(){ renderList(); });
 
         confirmBtn.addEventListener('click', async function(){
-          if(!hasDrawn) return;
+          var comp = comprobante.getData();
+          if(!comp) return;
           confirmBtn.disabled = true; confirmBtn.textContent = 'Guardando…';
-          var firmaDataUrl = canvas.toDataURL('image/png');
           var fresh = computeFor(emp);
           try{
             var dataBase = {
@@ -2504,17 +2590,20 @@ function buildDbShim(fsDb){
               periodoTipo: tipo, anio: ctx.anio,
               salarioBase: 0, bonificacion: 0, igss: 0, isr: 0, otrasDeducciones: 0, totalDeducciones: 0,
               diasTrabajados: { diasTrabajados: fresh.calc.dias, diasPeriodo: 365 },
+              comprobanteTipo: comp.tipo, comprobanteEn: new Date().toISOString(),
+              firma: comp.tipo === 'firma' ? comp.dataUrl : null, boletaDeposito: comp.tipo === 'boleta' ? comp.texto : null,
               registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
             };
             await state.db.collection('pagos').add(Object.assign({}, dataBase, {
               periodoEtiqueta: fresh.etiqueta, salarioBruto: fresh.montoAPagar, totalNeto: fresh.montoAPagar,
-              fechaPago: todayISO(), estado: 'pagado', firma: firmaDataUrl, firmadoEn: new Date().toISOString()
+              fechaPago: todayISO(), estado: 'pagado'
             }));
             if(fresh.parte){
               var montoParte2 = round2(fresh.calc.monto - fresh.montoAPagar);
               await state.db.collection('pagos').add(Object.assign({}, dataBase, {
                 periodoEtiqueta: etiquetaAnual(tipo, ctx.anio, 2), salarioBruto: montoParte2, totalNeto: montoParte2,
-                estado: 'pendiente', fechaPago: null, fechaLimitePago: ctx.fechaLimite2, firma: null, firmadoEn: null
+                estado: 'pendiente', fechaPago: null, fechaLimitePago: ctx.fechaLimite2,
+                comprobanteTipo: null, comprobanteEn: null, firma: null, boletaDeposito: null
               }));
             }
             toast('Pago registrado'); renderList();
@@ -3306,9 +3395,22 @@ function buildDbShim(fsDb){
       '<div class="divider-label">Desglose estimado</div>' +
       '<div class="breakdown" id="p-breakdown"></div>' +
       '<p class="disclaimer">Cálculo de IGSS ('+fmtPct(getIgssRate())+') e ISR según los parámetros configurados (por defecto, la tabla de rentas de trabajo en relación de dependencia vigente en Guatemala). Ajústalos en Equipo → Parámetros de IGSS/ISR si cambia la ley. Verifica cifras oficiales con tu contador antes de pagar.</p>' +
-      '<button class="btn btn-primary btn-block" id="p-submit" style="margin-top:14px;">Guardar pago</button>';
+      '<div id="p-comprobante-wrap">' + htmlComprobantePago('p') + '</div>' +
+      '<button class="btn btn-primary btn-block" id="p-submit" style="margin-top:14px;" disabled>Guardar pago</button>';
 
     openSheet('Registrar pago', body, function(root){
+      var submitBtn = root.querySelector('#p-submit');
+      var comprobante = wireComprobantePago(root, 'p', function(ready){
+        submitBtn.disabled = root.querySelector('input[name=p-estado]:checked').value === 'pagado' && !ready;
+      });
+      activeSheetCleanup = comprobante.cleanup;
+      function actualizarComprobanteVisibilidad(){
+        var pagado = root.querySelector('input[name=p-estado]:checked').value === 'pagado';
+        root.querySelector('#p-comprobante-wrap').hidden = !pagado;
+        submitBtn.disabled = pagado && !comprobante.isReady();
+      }
+      root.querySelectorAll('input[name=p-estado]').forEach(function(r){ r.addEventListener('change', actualizarComprobanteVisibilidad); });
+      actualizarComprobanteVisibilidad();
       function loansForCurrentEmp(){
         var empId = root.querySelector('#p-empleado').value;
         return state.prestamos.filter(function(l){ return l.empleadoId === empId && l.estado === 'activo'; });
@@ -3347,7 +3449,7 @@ function buildDbShim(fsDb){
         var loanSum = checkedLoans().reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp), empIgssPeriodo(emp), emp.igssMontoManual);
         root.querySelector('#p-breakdown').innerHTML =
           (diasInfo ? '<div class="banner" style="margin-bottom:10px;">Empleado nuevo: se le pagan '+diasInfo.diasTrabajados+' de '+diasInfo.diasPeriodo+' días de este periodo (ingresó el '+esc(emp.fechaIngreso)+').</div>' : '') +
           row('Salario base', b.salarioBase) + row('Bonificación incentivo', b.bonificacion) +
@@ -3377,7 +3479,9 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, fecha, periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, periodo, round2(manualOtras+loanSum), igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp), empIgssPeriodo(emp), emp.igssMontoManual);
+        var comp = estado === 'pagado' ? comprobante.getData() : null;
+        if(estado === 'pagado' && !comp){ toast('Firma o adjunta la boleta de depósito', true); return; }
         var data = Object.assign({
           empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
           periodoTipo: periodo, periodoEtiqueta: periodoEtiqueta(fecha, periodo),
@@ -3386,6 +3490,11 @@ function buildDbShim(fsDb){
           prestamosAplicados: loanApplied, diasTrabajados: diasInfo,
           registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
         }, b);
+        if(comp){
+          data.comprobanteTipo = comp.tipo;
+          data.comprobanteEn = new Date().toISOString();
+          if(comp.tipo === 'firma'){ data.firma = comp.dataUrl; } else { data.boletaDeposito = comp.texto; }
+        }
         try{
           await state.db.collection('pagos').add(data);
           for(var i=0;i<loanApplied.length;i++){
@@ -3419,7 +3528,9 @@ function buildDbShim(fsDb){
         (p.prestamosAplicados||[]).map(function(pa){ return '<div class="breakdown-row"><span>Descuento por: '+esc(pa.concepto)+'</span><span class="amt">-'+fmtQ(pa.monto)+'</span></div>'; }).join('') +
         '<div class="breakdown-row total"><span>Total neto</span><span class="amt">'+fmtQ(p.totalNeto)+'</span></div>' +
       '</div>' +
-      (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '') +
+      (p.comprobanteTipo === 'boleta' && p.boletaDeposito
+        ? '<div class="breakdown-row" style="padding:0 2px;"><span>Boleta de depósito</span><span>'+esc(p.boletaDeposito)+'</span></div>'
+        : (p.firma ? '<div class="divider-label">Firma de recibido</div><div class="signature-img-box"><img src="'+p.firma+'" alt="Firma de '+esc(p.empleadoNombre)+'"/></div>' : '')) +
       '<div class="breakdown-row" style="padding:0 2px;margin-top:8px;"><span>Registrado por</span><span>'+esc(p.registradoPor||'—')+'</span></div>' +
       (p.estado === 'pendiente' ? '<button class="btn btn-primary btn-block" id="marcar-pagado" style="margin-top:16px;">Marcar como pagado</button>' : '') +
       (p.estado !== 'pendiente' ? '<button class="btn btn-secondary btn-block" id="imprimir-recibo" style="margin-top:16px;">Imprimir recibo (PDF)</button>' : '') +
@@ -3506,7 +3617,7 @@ function buildDbShim(fsDb){
         '<p class="legal">El monto anterior incluye la Bonificación Incentivo de conformidad con el Decreto 37-2001 del Congreso de la República, y las deducciones de ley correspondientes al Instituto Guatemalteco de Seguridad Social (IGSS)'+(p.isr?' y al Impuesto Sobre la Renta (ISR), conforme a la Ley de Actualización Tributaria, Decreto 10-2012':'')+', cuando aplica.</p>' +
       '</div>' +
       '<div class="doc-signature">' +
-        '<div class="sig-block">'+(p.firma?'<img src="'+p.firma+'" style="max-width:200px;max-height:70px;display:block;margin:0 auto 4px;"/>':'')+'<div class="sig-line"></div>'+esc(p.empleadoNombre)+'<br>Recibí conforme</div>' +
+        '<div class="sig-block">'+(p.comprobanteTipo!=='boleta' && p.firma?'<img src="'+p.firma+'" style="max-width:200px;max-height:70px;display:block;margin:0 auto 4px;"/>':'')+'<div class="sig-line"></div>'+esc(p.empleadoNombre)+'<br>'+(p.comprobanteTipo==='boleta'?'Pagado por depósito bancario — Boleta No. '+esc(p.boletaDeposito||''):'Recibí conforme')+'</div>' +
         '<div class="sig-block"><div class="sig-line"></div>Por '+esc(em.nombre||'')+'</div>' +
       '</div>' +
       buildFooterHtml();
@@ -3650,7 +3761,7 @@ function buildDbShim(fsDb){
         var loanSum = loanApplied.reduce(function(s,l){ return s + l.monto; }, 0);
         var igssOn = empIgssActivo(emp), isrOn = empIsrActivo(emp);
         var diasInfo = calcularDiasTrabajados(emp.fechaIngreso, ctx.fecha, ctx.periodo);
-        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp));
+        var b = calcularDesglose(emp.salarioBase, emp.bonificacion!=null?emp.bonificacion:DEFAULT_BONIFICACION, ctx.periodo, loanSum, igssOn, isrOn, empFraccionQuincena1(emp), diasInfo, empBonoPeriodo(emp), empIgssPeriodo(emp), emp.igssMontoManual);
         return { etiqueta: etiqueta, pagoExistente: pagoExistente, cobertura: cobertura, loanApplied: loanApplied, igssOn: igssOn, isrOn: isrOn, b: b, diasInfo: diasInfo };
       }
 
@@ -3752,10 +3863,7 @@ function buildDbShim(fsDb){
             }).join('') +
             '<div class="breakdown-row total"><span>Total a pagar</span><span class="amt" id="ps-total-neto">'+fmtQ(b.totalNeto)+'</span></div>' +
           '</div>' +
-          '<div class="divider-label">Firma de recibido</div>' +
-          '<div class="signature-box"><canvas id="firma-canvas"></canvas></div>' +
-          '<div class="quick-actions" style="margin-top:10px;"><button class="btn btn-secondary btn-block" id="firma-borrar">Borrar firma</button></div>' +
-          '<p class="hint">Pide al empleado que firme aquí para confirmar que recibió su pago.</p>' +
+          htmlComprobantePago('ps') +
           '<button class="btn btn-primary btn-block" id="firma-confirmar" style="margin-top:14px;" disabled>Confirmar pago</button>';
 
         function row(label, val){ return '<div class="breakdown-row"><span>'+label+'</span><span class="amt">'+fmtQ(val)+'</span></div>'; }
@@ -3774,54 +3882,17 @@ function buildDbShim(fsDb){
         content.querySelectorAll('.loan-amt-input-firma').forEach(function(inp){ inp.addEventListener('input', recalcTotal); });
         recalcTotal();
 
-        var canvas = content.querySelector('#firma-canvas');
-        var c2d = canvas.getContext('2d');
         var confirmBtn = content.querySelector('#firma-confirmar');
-        var hasDrawn = false, drawing = false, lastX = 0, lastY = 0;
-
-        function sizeCanvas(){
-          var rect = canvas.getBoundingClientRect();
-          canvas.width = Math.max(280, Math.round(rect.width));
-          canvas.height = 170;
-          c2d.lineWidth = 2.4; c2d.lineCap = 'round'; c2d.lineJoin = 'round'; c2d.strokeStyle = '#000000';
-        }
-        sizeCanvas();
-
-        function pos(e){
-          var rect = canvas.getBoundingClientRect();
-          return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        }
-        function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
-        function move(e){
-          if(!drawing) return;
-          e.preventDefault();
-          var p = pos(e);
-          c2d.beginPath(); c2d.moveTo(lastX, lastY); c2d.lineTo(p.x, p.y); c2d.stroke();
-          lastX = p.x; lastY = p.y;
-          if(!hasDrawn){ hasDrawn = true; confirmBtn.disabled = false; }
-        }
-        function stop(){ drawing = false; }
-        canvas.addEventListener('pointerdown', start);
-        canvas.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', stop);
-
-        ctx.cleanupSig = function(){
-          canvas.removeEventListener('pointerdown', start);
-          canvas.removeEventListener('pointermove', move);
-          window.removeEventListener('pointerup', stop);
-        };
+        var comprobante = wireComprobantePago(content, 'ps', function(ready){ confirmBtn.disabled = !ready; });
+        ctx.cleanupSig = comprobante.cleanup;
         activeSheetCleanup = ctx.cleanupSig;
 
-        content.querySelector('#firma-borrar').addEventListener('click', function(){
-          c2d.clearRect(0, 0, canvas.width, canvas.height);
-          hasDrawn = false; confirmBtn.disabled = true;
-        });
         content.querySelector('#sig-volver').addEventListener('click', function(){ renderList(); });
 
         confirmBtn.addEventListener('click', async function(){
-          if(!hasDrawn) return;
+          var comp = comprobante.getData();
+          if(!comp) return;
           confirmBtn.disabled = true; confirmBtn.textContent = 'Guardando…';
-          var firmaDataUrl = canvas.toDataURL('image/png');
           var fresh = computeFor(emp);
           var loanFinal = loansEditados();
           var loanSumFinal = loanFinal.reduce(function(s,l){ return s + l.monto; }, 0);
@@ -3836,7 +3907,8 @@ function buildDbShim(fsDb){
             fechaPago: ctx.fecha, estado: 'pagado',
             otrasDeduccionesManual: 0, otrasDeduccionesNota: '',
             prestamosAplicados: loanFinal, diasTrabajados: fresh.diasInfo,
-            firma: firmaDataUrl, firmadoEn: new Date().toISOString(),
+            comprobanteTipo: comp.tipo, comprobanteEn: new Date().toISOString(),
+            firma: comp.tipo === 'firma' ? comp.dataUrl : null, boletaDeposito: comp.tipo === 'boleta' ? comp.texto : null,
             registradoPor: state.session.nombre, creadoEn: new Date().toISOString()
           }, bFinal);
           try{
