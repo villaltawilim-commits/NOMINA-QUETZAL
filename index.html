@@ -443,12 +443,17 @@ function buildDbShim(fsDb){
   var ISR_TOPE1_DEFAULT = 300000;
   var ISR_TASA2_DEFAULT = 0.07;
   var EXENCION_ANUAL_ISR_DEFAULT = 48000;
+  // Salario mínimo mensual (actividades no agrícolas, departamento de Guatemala), según Acuerdo
+  // Gubernativo 256-2025 vigente desde 2026. Cambia cada año por decreto — verifícalo y ajústalo en
+  // Equipo → Parámetros antes de usar la opción "Sueldo mínimo" en Bono 14/Aguinaldo. No incluye la
+  // bonificación incentivo (esa ya se calcula aparte en el sistema).
+  var SALARIO_MINIMO_DEFAULT = 4002.28;
   var DEFAULT_BONIFICACION = 250;
   var MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   var SUPERADMIN_EMAILS = ['villaltawilim@gmail.com'];
   // Súbela cada vez que se publique un cambio importante: 1.0, 1.1 ... 1.9, luego 2.0, 2.1, etc.
   // El propio sistema detecta sola la versión nueva la próxima vez que entres a Licencias.
-  var APP_VERSION = '1.5';
+  var APP_VERSION = '1.6';
   var versionAutoRegistrada = false;
   // Número de WhatsApp de soporte (pagos de licencia y ayuda): lo configura el superadmin desde
   // Licencias, en state.configSoporte.whatsapp. Aquí solo se da formato y se arma el enlace.
@@ -720,6 +725,10 @@ function buildDbShim(fsDb){
     var v = empresaActual().igssRate;
     return (v != null && !isNaN(v)) ? Number(v) : IGSS_RATE_DEFAULT;
   }
+  function getSalarioMinimo(){
+    var v = empresaActual().salarioMinimoMensual;
+    return (v != null && !isNaN(v)) ? Number(v) : SALARIO_MINIMO_DEFAULT;
+  }
   function getIsrParams(){
     var c = empresaActual();
     return {
@@ -823,11 +832,12 @@ function buildDbShim(fsDb){
     var dias = Math.round((finReal - ini) / 86400000) + 1;
     return Math.max(0, dias);
   }
-  function calcularMontoAnual(emp, tipo, anio, fechaCorte){
+  function calcularMontoAnual(emp, tipo, anio, fechaCorte, baseCalculo){
     var periodo = periodoAnual(tipo, anio);
     var dias = diasTrabajadosEnPeriodoAnual(emp.fechaIngreso, periodo.inicio, periodo.fin, fechaCorte);
-    var monto = round2((Number(emp.salarioBase)||0) * dias / 365);
-    return { dias: dias, diasPeriodo: 365, monto: monto, periodo: periodo };
+    var salarioBaseUsado = baseCalculo === 'minimo' ? getSalarioMinimo() : (Number(emp.salarioBase)||0);
+    var monto = round2(salarioBaseUsado * dias / 365);
+    return { dias: dias, diasPeriodo: 365, monto: monto, periodo: periodo, salarioBaseUsado: salarioBaseUsado };
   }
   function etiquetaAnual(tipo, anio, parte){
     var base = tipo === 'bono14' ? 'Bono 14' : 'Aguinaldo';
@@ -2453,7 +2463,7 @@ function buildDbShim(fsDb){
   // dividirse en dos partes iguales (la segunda queda pendiente con plazo al 15 de enero); el
   // bono 14 siempre es un solo pago (la ley no contempla dividirlo).
   function openPagarAnual(tipo){
-    var ctx = { anio: new Date().getFullYear(), partes: 1, fechaLimite2: '', cleanupSig: null };
+    var ctx = { anio: new Date().getFullYear(), partes: 1, fechaLimite2: '', cleanupSig: null, baseCalculoPorEmpleado: {} };
     var tituloTipo = tipo === 'bono14' ? 'Bono 14' : 'Aguinaldo';
     ctx.fechaLimite2 = defaultFechaLimite2(tipo, ctx.anio);
 
@@ -2466,10 +2476,11 @@ function buildDbShim(fsDb){
         var etiqueta = etiquetaAnual(tipo, ctx.anio, parte);
         var pagoExistente = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiqueta && p.estado === 'pagado'; });
         var noAplicaDoc = state.pagos.find(function(p){ return p.empleadoId === emp.id && p.periodoEtiqueta === etiquetaBase && p.estado === 'no_aplica'; });
-        var calc = calcularMontoAnual(emp, tipo, ctx.anio, todayISO());
+        var baseCalculo = ctx.baseCalculoPorEmpleado[emp.id] || 'completo';
+        var calc = calcularMontoAnual(emp, tipo, ctx.anio, todayISO(), baseCalculo);
         var montoAPagar = parte ? round2(calc.monto / 2) : calc.monto;
         var estado = noAplicaDoc ? 'no_aplica' : (pagoExistente ? 'pagado' : 'pendiente');
-        return { etiquetaBase: etiquetaBase, etiqueta: etiqueta, pagoExistente: pagoExistente, noAplicaDoc: noAplicaDoc, estado: estado, calc: calc, montoAPagar: montoAPagar, parte: parte };
+        return { etiquetaBase: etiquetaBase, etiqueta: etiqueta, pagoExistente: pagoExistente, noAplicaDoc: noAplicaDoc, estado: estado, calc: calc, montoAPagar: montoAPagar, parte: parte, baseCalculo: baseCalculo };
       }
 
       function renderList(){
@@ -2493,15 +2504,20 @@ function buildDbShim(fsDb){
             '<label style="display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--ink-muted);flex-shrink:0;margin-left:8px;">' +
               '<input type="checkbox" class="noaplica-cb" data-emp="'+e.id+'" style="width:15px;height:15px;accent-color:var(--primary);" '+(info.estado==='no_aplica'?'checked':'')+'/>No aplica' +
             '</label>';
-          return '<div class="ledger-row pay-row">' +
+          var checkboxMinimo = (info.estado === 'pagado' || info.estado === 'no_aplica') ? '' :
+            '<label style="display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--ink-muted);flex-shrink:0;margin-left:8px;">' +
+              '<input type="checkbox" class="minimo-cb" data-emp="'+e.id+'" style="width:15px;height:15px;accent-color:var(--primary);" '+(info.baseCalculo==='minimo'?'checked':'')+'/>Sueldo mínimo' +
+            '</label>';
+          return '<div class="ledger-row pay-row" style="flex-wrap:wrap;">' +
             '<span class="status-bar '+statusClass+'"></span>' +
-            '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+subLabel+'</span></span>' +
-            accion + checkboxNoAplica +
+            '<span class="row-main"><span class="title">'+esc(e.nombre)+'</span><span class="sub">'+subLabel+(info.baseCalculo==='minimo'?' · sobre sueldo mínimo':'')+'</span></span>' +
+            accion + checkboxNoAplica + checkboxMinimo +
           '</div>';
         }).join('');
 
         content.innerHTML =
           '<div class="field"><label for="pa-anio">Año</label><input id="pa-anio" type="number" min="2020" max="2100" step="1" value="'+ctx.anio+'"/></div>' +
+          '<p class="hint" style="margin-top:-6px;">Por defecto se calcula sobre el sueldo completo de cada empleado. Marca "Sueldo mínimo" en quien corresponda para calcularlo sobre '+fmtQ(getSalarioMinimo())+'/mes (configurable en Equipo → Parámetros).</p>' +
           '<div class="field"><label>¿En cuántos pagos?</label><div class="radio-group">' +
             '<label class="radio-chip"><input type="radio" name="pa-partes" value="1" '+(ctx.partes===1?'checked':'')+'/><span>Un pago (100%)</span></label>' +
             '<label class="radio-chip"><input type="radio" name="pa-partes" value="2" '+(ctx.partes===2?'checked':'')+'/><span>Dos pagos (50% + 50%)</span></label>' +
@@ -2558,6 +2574,12 @@ function buildDbShim(fsDb){
             }catch(e){ toast('No se pudo actualizar: '+(e.code||''), true); cb.disabled = false; }
           });
         });
+        content.querySelectorAll('.minimo-cb').forEach(function(cb){
+          cb.addEventListener('change', function(){
+            ctx.baseCalculoPorEmpleado[cb.dataset.emp] = cb.checked ? 'minimo' : 'completo';
+            renderList();
+          });
+        });
       }
 
       function renderFirma(emp){
@@ -2565,7 +2587,7 @@ function buildDbShim(fsDb){
         content.innerHTML =
           '<button class="btn btn-ghost" id="sig-volver" style="padding:4px 0;margin-bottom:8px;">‹ Volver a la lista</button>' +
           '<div class="view-head" style="margin-bottom:10px;"><h1 style="font-size:1.2rem;">'+esc(emp.nombre)+'</h1><p>'+esc(info.etiqueta)+'</p></div>' +
-          '<div class="banner">Se le pagan '+info.calc.dias+' de 365 días del periodo ('+esc(info.calc.periodo.inicio)+' a '+esc(info.calc.periodo.fin)+').'+
+          '<div class="banner">Se le pagan '+info.calc.dias+' de 365 días del periodo ('+esc(info.calc.periodo.inicio)+' a '+esc(info.calc.periodo.fin)+'), calculado sobre '+(info.baseCalculo==='minimo'?'el sueldo mínimo ('+fmtQ(info.calc.salarioBaseUsado)+'/mes)':'su sueldo completo ('+fmtQ(info.calc.salarioBaseUsado)+'/mes)')+'.'+
             (info.parte ? ' Esta es la primera mitad (50%); la segunda queda pendiente con plazo al '+esc(ctx.fechaLimite2)+'.' : '') +
           '</div>' +
           '<div class="breakdown"><div class="breakdown-row total"><span>Total a pagar</span><span class="amt">'+fmtQ(info.montoAPagar)+'</span></div></div>' +
@@ -2587,7 +2609,7 @@ function buildDbShim(fsDb){
           try{
             var dataBase = {
               empleadoId: emp.id, empleadoNombre: emp.nombre, puesto: emp.puesto||'', empresaId: state.empresaActualId,
-              periodoTipo: tipo, anio: ctx.anio,
+              periodoTipo: tipo, anio: ctx.anio, baseCalculo: fresh.baseCalculo, salarioBaseUsado: fresh.calc.salarioBaseUsado,
               salarioBase: 0, bonificacion: 0, igss: 0, isr: 0, otrasDeducciones: 0, totalDeducciones: 0,
               diasTrabajados: { diasTrabajados: fresh.calc.dias, diasPeriodo: 365 },
               comprobanteTipo: comp.tipo, comprobanteEn: new Date().toISOString(),
@@ -2847,20 +2869,70 @@ function buildDbShim(fsDb){
     var cuotaTexto = l.frecuencia === 'ambas'
       ? fmtQ(l.montoQ1||0)+' (día 15) / '+fmtQ(l.montoQ2||0)+' (fin de mes)'
       : fmtQ(l.montoCuota)+' · '+etiquetaFrecuenciaPrestamo(l);
+    var abonos = l.abonos || [];
+    var totalAbonado = round2(abonos.reduce(function(s,a){ return s + (Number(a.monto)||0); }, 0));
     var body =
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Monto total</span><span class="amt">'+fmtQ(l.montoTotal)+'</span></div>' +
         '<div class="breakdown-row"><span>Descuento por cuota</span><span class="amt">'+cuotaTexto+'</span></div>' +
-        '<div class="breakdown-row"><span>Cuotas aplicadas</span><span>'+(l.cuotasAplicadas||0)+' / '+l.numCuotas+'</span></div>' +
+        '<div class="breakdown-row"><span>Cuotas aplicadas en planilla</span><span>'+(l.cuotasAplicadas||0)+' / '+l.numCuotas+'</span></div>' +
+        (totalAbonado ? '<div class="breakdown-row"><span>Pagado directo (efectivo/otro)</span><span class="amt">'+fmtQ(totalAbonado)+'</span></div>' : '') +
         '<div class="breakdown-row total"><span>Saldo pendiente</span><span class="amt">'+fmtQ(l.saldoPendiente)+'</span></div>' +
       '</div>' +
-      (l.estado === 'activo' ? '<button class="btn btn-danger btn-block" id="cancelar-prestamo">Cancelar préstamo/descuento</button>' : '');
+      (l.estado === 'activo' ? '<button class="btn btn-secondary btn-block" id="registrar-abono" style="margin-top:8px;">Registrar pago directo (efectivo u otro)</button>' : '') +
+      (abonos.length ?
+        '<div class="divider-label">Pagos directos registrados</div><div class="ledger" style="padding:2px 12px;" id="abonos-wrap">' +
+          abonos.slice().reverse().map(function(a){
+            return '<div class="ledger-row" style="cursor:default;"><span class="status-bar good"></span>' +
+              '<span class="row-main"><span class="title">'+esc(a.fecha)+'</span><span class="sub">'+(a.nota?esc(a.nota)+' · ':'')+esc(a.registradoPor||'')+'</span></span>' +
+              '<span class="row-amount"><span class="amt">'+fmtQ(a.monto)+'</span></span></div>';
+          }).join('') +
+        '</div>'
+        : '') +
+      (l.estado === 'activo' ? '<button class="btn btn-danger btn-block" id="cancelar-prestamo" style="margin-top:8px;">Cancelar préstamo/descuento</button>' : '');
     openSheet(esc(l.concepto), body, function(root){
+      var btnAbono = root.querySelector('#registrar-abono');
+      if(btnAbono) btnAbono.addEventListener('click', function(){ closeSheet(); setTimeout(function(){ openAbonoDirectoForm(l); }, 230); });
       var btn = root.querySelector('#cancelar-prestamo');
       if(btn) btn.addEventListener('click', async function(){
         if(!confirm('¿Cancelar? Ya no se aplicará a los próximos pagos.')) return;
         try{ await state.db.collection('prestamos').doc(l.id).update({estado:'cancelado'}); toast('Cancelado'); closeSheet(); }
         catch(e){ toast('No se pudo cancelar: '+(e.code||''), true); }
+      });
+    });
+  }
+
+  // Pago directo de un préstamo/descuento con dinero del empleado (efectivo, ahorros, transferencia,
+  // etc.), sin pasar por un descuento de planilla. Reduce el saldo pendiente igual que una cuota,
+  // pero queda registrado aparte (abonos) para no confundirlo con los descuentos automáticos.
+  function openAbonoDirectoForm(l){
+    var body =
+      '<div class="breakdown"><div class="breakdown-row total"><span>Saldo pendiente</span><span class="amt">'+fmtQ(l.saldoPendiente)+'</span></div></div>' +
+      '<div class="field"><label for="ab-monto">Monto recibido (Q)</label><input id="ab-monto" type="number" min="0.01" step="0.01" value="'+l.saldoPendiente+'"/></div>' +
+      '<div class="field"><label for="ab-fecha">Fecha</label><input id="ab-fecha" type="date" value="'+todayISO()+'"/></div>' +
+      '<div class="field"><label for="ab-nota">Nota (opcional)</label><input id="ab-nota" placeholder="Ej. Pagó en efectivo en oficina"/></div>' +
+      '<p class="disclaimer">Este pago no se descuenta del sueldo — úsalo cuando el empleado pague directamente (efectivo, ahorros, transferencia, etc.) fuera de la planilla.</p>' +
+      '<button class="btn btn-primary btn-block" id="ab-submit" style="margin-top:6px;">Registrar pago</button>';
+    openSheet('Pago directo — ' + l.concepto, body, function(root){
+      root.querySelector('#ab-submit').addEventListener('click', async function(){
+        var monto = round2(root.querySelector('#ab-monto').value);
+        var fecha = root.querySelector('#ab-fecha').value;
+        var nota = root.querySelector('#ab-nota').value.trim();
+        if(!monto || monto <= 0){ toast('El monto debe ser mayor a 0', true); return; }
+        if(!fecha){ toast('Elige la fecha', true); return; }
+        var montoAplicado = round2(Math.min(monto, l.saldoPendiente));
+        var nuevoSaldo = round2(l.saldoPendiente - montoAplicado);
+        var nuevoAbono = { monto: montoAplicado, fecha: fecha, nota: nota, registradoPor: state.session.nombre, creadoEn: new Date().toISOString() };
+        var abonosNuevos = (l.abonos || []).concat([nuevoAbono]);
+        try{
+          await state.db.collection('prestamos').doc(l.id).update({
+            saldoPendiente: nuevoSaldo,
+            abonos: abonosNuevos,
+            estado: nuevoSaldo <= 0.01 ? 'completado' : 'activo'
+          });
+          toast(monto > l.saldoPendiente ? 'Pago registrado (ajustado al saldo pendiente de '+fmtQ(montoAplicado)+')' : 'Pago registrado');
+          closeSheet();
+        }catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
       });
     });
   }
@@ -3519,6 +3591,7 @@ function buildDbShim(fsDb){
       (p.diasTrabajados ? '<div class="banner">Empleado nuevo: se le pagaron '+p.diasTrabajados.diasTrabajados+' de '+p.diasTrabajados.diasPeriodo+' días de este periodo.</div>' : '') +
       '<div class="breakdown">' +
         '<div class="breakdown-row"><span>Periodo</span><span>'+esc(etiquetaLegible(p.periodoEtiqueta))+'</span></div>' +
+        (p.baseCalculo ? '<div class="breakdown-row"><span>Calculado sobre</span><span>'+(p.baseCalculo==='minimo'?'Sueldo mínimo':'Sueldo completo')+' ('+fmtQ(p.salarioBaseUsado)+'/mes)</span></div>' : '') +
         '<div class="breakdown-row"><span>Fecha</span><span>'+esc(p.fechaPago)+'</span></div>' +
         '<div class="breakdown-row"><span>Salario base</span><span class="amt">'+fmtQ(p.salarioBase)+'</span></div>' +
         '<div class="breakdown-row"><span>Bonificación</span><span class="amt">'+fmtQ(p.bonificacion)+'</span></div>' +
@@ -4808,6 +4881,8 @@ function buildDbShim(fsDb){
         '<div class="field"><label for="pf-t2">Tasa sobre el excedente (%)</label><input id="pf-t2" type="number" min="0" step="0.01" value="'+fmtPctNum(isr.tasa2)+'"/></div>' +
         '<div class="field"><label for="pf-exen">Exención anual (Q)</label><input id="pf-exen" type="number" min="0" step="1" value="'+isr.exencion+'"/></div>' +
       '</div>' +
+      '<div class="divider-label">Salario mínimo (Bono 14 / Aguinaldo)</div>' +
+      '<div class="field"><label for="pf-minimo">Salario mínimo mensual (Q)</label><input id="pf-minimo" type="number" min="0" step="0.01" value="'+getSalarioMinimo()+'"/><p class="hint">No incluye la bonificación incentivo. Cambia cada año por decreto del gobierno — verifícalo antes de usar la opción "Sueldo mínimo" al pagar Bono 14 o Aguinaldo.</p></div>' +
       '<p class="disclaimer">Estos valores se usan para calcular IGSS e ISR en todos los pagos de la app. Vienen precargados con lo que indica la ley de Guatemala vigente; ajústalos solo si hay un cambio oficial.</p>' +
       '<button class="btn btn-primary btn-block" id="pf-submit" style="margin-top:6px;">Guardar</button>' +
       '<button class="btn btn-ghost btn-block" id="pf-reset">Restablecer valores de ley</button>';
@@ -4818,6 +4893,7 @@ function buildDbShim(fsDb){
         root.querySelector('#pf-tope1').value = ISR_TOPE1_DEFAULT;
         root.querySelector('#pf-t2').value = fmtPctNum(ISR_TASA2_DEFAULT);
         root.querySelector('#pf-exen').value = EXENCION_ANUAL_ISR_DEFAULT;
+        root.querySelector('#pf-minimo').value = SALARIO_MINIMO_DEFAULT;
       });
       root.querySelector('#pf-submit').addEventListener('click', async function(){
         var data = {
@@ -4825,7 +4901,8 @@ function buildDbShim(fsDb){
           isrTasa1: round4(Number(root.querySelector('#pf-t1').value)/100),
           isrTope1: round2(root.querySelector('#pf-tope1').value),
           isrTasa2: round4(Number(root.querySelector('#pf-t2').value)/100),
-          isrExencionAnual: round2(root.querySelector('#pf-exen').value)
+          isrExencionAnual: round2(root.querySelector('#pf-exen').value),
+          salarioMinimoMensual: round2(root.querySelector('#pf-minimo').value)
         };
         try{ await state.db.collection('empresas').doc(state.empresaActualId).update(data); toast('Parámetros actualizados'); closeSheet(); }
         catch(e){ toast('No se pudo guardar: '+(e.code||''), true); }
